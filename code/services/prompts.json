@@ -1,0 +1,57 @@
+{
+  "_meta": "Prompts + config for tailor.py. BLANK STARTER - generic, no personal facts. Fill data/ and tune these prompts for the specific person. {curly} tokens are filled by the script at runtime.",
+
+  "model_default": "gemini/gemini-3.1-pro-preview",
+
+  "guardrails": "You tailor a resume to a specific job description. HARD RULES, never break them:\n- TRUTH: use ONLY facts, numbers, technologies, and claims present in the material you are given. Invent nothing. If the JD wants something not in the material, do NOT add it - list it under \"gaps\".\n- NUMBERS are exact, never rounded or embellished.\n- No internal project codenames - describe the work, not the name.\n- VOICE: human, first person, short dense phrases. Not an elevator pitch, not buzzword stacking. It should read like a person talking.\n- No 'I do the work of 3-5 people' / omnicompetence framing.\n- Output STRICT JSON exactly matching the schema in the task. No prose outside the JSON.\n\n[TODO: add person-specific guardrails here - exact figures, era/technology boundaries, framing rules - see the reference system's AGENT_GUIDE section 3.]",
+
+  "factbook": {
+    "system": "You build a career FACTBOOK - the single source of truth for one person. HARD RULES, never break them:\n- Use ONLY facts, numbers, dates, technologies, and claims present in the RAW MATERIAL. Invent nothing.\n- Numbers and dates are EXACT as written; never round, infer, or embellish.\n- If something is ambiguous, unclear, or conflicting, keep it and mark it [?] - do NOT guess.\n- Merge duplicates that appear across files; if two files conflict, keep both values and mark [conflict].\n- No editorialising, no inflation, no marketing voice - just the facts.\n- Use plain hyphens, never long dashes.\n- Output GitHub-Flavoured Markdown only. No preamble, no closing remarks.",
+    "task": "From the RAW MATERIAL below, produce a factbook in EXACTLY this Markdown structure (keep the headings; fill each section from the material; add or remove numbered era sections to match the real number of employers/eras found; drop a section only if the material has nothing for it):\n\n# Factbook - <person name if known, else PERSON>\n\n## 1. Early background (before <year>)\n- <education, early jobs, foundational facts>\n\n## 2. <era / employer> (<start> - <end>)\n- <role, projects, what was built, exact numbers/metrics, technologies>\n\n## 3. <era / employer> (<start> - <end>)\n- <...>\n\n## 4. <current / most recent employer> (<start> - present)\n**Career progression:** <role1 -> role2 -> ...>\n- <projects, achievements, exact numbers, technologies>\n\n## Public activity\n**Public speaking:** <talk - url>\n**Articles:** <title - url>\n**Certificates:** <cert - url>\n\n## Expertise & Skills\n- **<category>**: <comma-separated items>\n\n## Resolved facts / guardrails\n- <hard facts, exact figures, era/technology boundaries, claims to avoid - anything a later step must not break>\n\n## Gaps / open questions\n- <every missing, ambiguous, or [?]/[conflict] item the person should confirm>\n\nRAW MATERIAL (each source file is delimited by a '===== FILE: <name> =====' line):\n{material}"
+  },
+
+  "factbook_resolve": {
+    "system": "You update a career FACTBOOK using the person's own answers to some of its open questions. HARD RULES, never break them:\n- Use ONLY what the answers state, plus everything already in the factbook. Invent nothing beyond that.\n- Merge each answer into the relevant existing section (do not just append a Q&A dump).\n- For every question that is now resolved, remove its bullet from 'Gaps / open questions' (or refine it if only partly answered - keep it if still open).\n- Keep every other part of the factbook exactly as it was, including formatting and unrelated gaps.\n- Use plain hyphens, never long dashes.\n- Output the FULL updated factbook as GitHub-Flavoured Markdown only. No preamble, no closing remarks.",
+    "task": "CURRENT FACTBOOK:\n{factbook}\n\nANSWERS to some of its open questions (question, then the person's answer):\n{answers}\n\nReturn the complete updated factbook markdown."
+  },
+
+  "profile": {
+    "system": "You convert a career FACTBOOK into structured resume data. HARD RULES, never break them:\n- Use ONLY facts present in the factbook; invent nothing. Numbers and dates are exact.\n- Ignore anything marked [conflict] or [?] unless it is unambiguous; never present a guess as fact.\n- No project codenames - describe the work.\n- Human voice, short dense bullets; no buzzword stacking, no 'work of 3-5 people' framing.\n- Output STRICT JSON only - no prose, no markdown fences.",
+    "task": "From the FACTBOOK below, produce STRICT JSON in exactly this shape:\n{\n  \"identity\": {\"name\": \"...\", \"contact\": \"city, country - email - linkedin/handle (omit any part not in the factbook)\", \"education\": {\"degree\": \"...\", \"institution\": \"...\", \"dates\": \"...\"}, \"companies\": {\"role1\": \"...\", \"role2\": \"...\", \"role3\": \"...\", \"role4\": \"...\"}},\n  \"roles\": {\"role1\": {\"title\": \"...\", \"dates\": \"...\"}, \"role2\": {\"title\": \"...\", \"dates\": \"...\"}, \"role3\": {\"title\": \"...\", \"dates\": \"...\"}, \"role4\": {\"title\": \"...\", \"dates\": \"...\"}},\n  \"blocks\": [{\"id\": \"kebab-case\", \"role_slot\": \"role1|role2|role3|role4\", \"rank\": 1, \"text\": \"one achievement with exact numbers/tech\"}],\n  \"skills\": [{\"label\": \"...\", \"items\": \"a, b, c\"}],\n  \"public_speaking\": [{\"id\": \"kebab\", \"text\": \"talk - url\"}],\n  \"articles\": [{\"id\": \"kebab\", \"text\": \"title - url\"}],\n  \"headline\": \"3-4 segments separated by ' | '\",\n  \"summary\": \"~80 words, human, 3-4 **bold** accents\",\n  \"footer_title\": \"Name - Role\"\n}\nMAPPING RULES:\n- role1 = most recent / primary employer, then role2, role3, role4 (older but notable). Pick the 4 most significant recent roles; fold minor early jobs into the summary only. companies[roleN] and roles[roleN] are the SAME employer.\n- blocks: up to 10 for role1, 9 for role2, 7 for role3, 4 for role4; each a concrete accomplishment from the factbook (exact figures/tech); set role_slot and rank (1 = strongest).\n- skills: a flat list of clusters (as many as fit the person - typically 3-6); each cluster is one themed line = a label plus comma-separated items, drawn from the factbook's skills/tech.\n- public_speaking / articles: only entries actually present in the factbook, with their URLs; else empty arrays.\n\nFACTBOOK:\n{factbook}"
+  },
+
+  "depth_levels": {
+    "light": "LIGHT rework: keep the wording almost as-is; only reorder and swap a few words to echo the JD's language. Do not rewrite whole sentences.",
+    "medium": "MEDIUM rework: rewrite phrasing to foreground what the JD weighs most, but keep every fact, number, and claim identical.",
+    "deep": "DEEP rework: freely restructure and rewrite the prose for maximum fit to the JD, still inventing nothing beyond the provided facts."
+  },
+
+  "block_prompts": {
+    "headline": "Tailor the resume HEADLINE (the pipe-separated line under the name) to the job below.\n{depth}\nRules: 3-4 segments, mirror the target role, no invented skills.\n\nJOB DESCRIPTION:\n{jd}\n\nEXTRA INSTRUCTIONS: {extra}\n\nCURRENT HEADLINE:\n{content}\n\nReturn JSON: {\"headline\": \"...\", \"gaps\": [\"...\"]}",
+
+    "summary": "Tailor the resume SUMMARY (the short intro paragraph) to the job below.\n{depth}\nRules: ~90 words max, human voice, 3-4 **bold** accents (use **double asterisks**), no buzzword stacking, every claim traceable to the current summary + the fact notes.\n\nJOB DESCRIPTION:\n{jd}\n\nEXTRA INSTRUCTIONS: {extra}\n\nCURRENT SUMMARY:\n{content}\n\nFACT NOTES (do not exceed these):\n{facts}\n\nReturn JSON: {\"summary\": \"...\", \"gaps\": [\"...\"]}",
+
+    "skills": "Reorder / re-emphasise the SKILLS clusters to lead with what the job below weighs most. You may reorder clusters and items and drop the least relevant, but add nothing not already present.\n{depth}\n\nJOB DESCRIPTION:\n{jd}\n\nEXTRA INSTRUCTIONS: {extra}\n\nCURRENT CLUSTERS (JSON list of {label, items}):\n{content}\n\nReturn JSON: {\"clusters\": [{\"label\": \"...\", \"items\": \"...\"}], \"gaps\": [\"...\"]}",
+
+    "bullets": "Select, order, and reword the BULLETS for one role to fit the job below. You may ONLY use the candidate bullets provided - reorder, reword within the depth limit, and pick the best {max_bullets} - but invent no new facts, numbers, or technologies.\n{depth}\n\nJOB DESCRIPTION:\n{jd}\n\nEXTRA INSTRUCTIONS: {extra}\n\nCANDIDATE BULLETS (JSON list of strings; **double asterisks** mark existing bold accents - keep the accents):\n{content}\n\nReturn JSON: {\"bullets\": [\"...\", \"...\"], \"gaps\": [\"...\"]}",
+
+    "feedback": "The user reviewed the tailored resume and gave feedback. Apply it, obeying all guardrails. Change only what the feedback asks.\n\nUSER FEEDBACK:\n{feedback}\n\nCURRENT TAILORED CONTENT (JSON matching the resume schema):\n{content}\n\nReturn the full updated content as JSON in the SAME schema. No prose outside the JSON."
+  },
+
+  "new_track_questions": [
+    {"key": "track_id", "q": "New track id (snake_case, e.g. director_remote)", "type": "text"},
+    {"key": "label", "q": "One-line label for this track (what role is it for?)", "type": "text"},
+    {"key": "base_track", "q": "Clone role scaffold + defaults from which existing track?", "type": "choice_track"},
+    {"key": "headline_seed", "q": "Headline direction in a few words (what should it lead with?)", "type": "text"},
+    {"key": "summary_seed", "q": "Summary angle in one sentence (what's the core pitch?)", "type": "text"},
+    {"key": "role1_max", "q": "Max bullets for the most recent role (role1)", "type": "int", "default": 6},
+    {"key": "role2_max", "q": "Max bullets for role2", "type": "int", "default": 4},
+    {"key": "role3_max", "q": "Max bullets for role3", "type": "int", "default": 3},
+    {"key": "role4_max", "q": "Max bullets for role4", "type": "int", "default": 2}
+  ],
+
+  "pipeline": [
+    {"prompt": "headline", "name": "Headline", "path": "tagline", "key": "headline", "kind": "text"},
+    {"prompt": "summary", "name": "Summary", "path": "summary", "key": "summary", "kind": "text", "facts": true}
+  ]
+}

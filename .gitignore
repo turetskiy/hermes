@@ -1,0 +1,16 @@
+# Hermes keeps all user data (factbook, positioning, blocks, identity, generated resumes, .env)
+# in ~/Hermes - OUTSIDE this repo (see code/paths.py) - so there is nothing personal to ignore here.
+
+# virtualenv (created on first run by bootstrap.py)
+.venv/
+
+# python
+**/__pycache__/
+*.pyc
+*.pyo
+
+# a project-local .env would only exist if someone overrides HERMES_ENV; ignore it defensively
+.env
+
+# OS
+.DS_Store
