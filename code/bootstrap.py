@@ -53,7 +53,13 @@ def deps_ok():
 
 
 def _quiet(cmd):
-    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    """Like subprocess.run(), but never raises - a launch failure (e.g. cmd[0] doesn't exist) becomes
+    a normal nonzero-returncode result instead of an uncaught exception, so every _quiet() call site's
+    existing `.returncode != 0` handling covers it uniformly, with no separate try/except needed there."""
+    try:
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except OSError as e:
+        return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=str(e).encode())
 
 
 def _bar(done, total, label=""):
@@ -110,8 +116,18 @@ def ensure():
         print("\nFirst run - preparing Hermes (one-time).")
         sys.stdout.write("  creating virtual environment ... ")
         sys.stdout.flush()
-        if _quiet([sys.executable, "-m", "venv", VENV]).returncode != 0:
+        venv_ok = _quiet([sys.executable, "-m", "venv", VENV]).returncode == 0
+        if venv_ok and not os.path.exists(VENV_PY):
+            # venv reported success but its own python.exe is missing - seen when sys.executable is a
+            # non-standard/bundled Python (e.g. one shipped inside another app like Inkscape) whose
+            # venv module doesn't fully copy itself; surfacing this now beats a raw crash on first use
+            print(f"failed.\n  ({sys.executable} created a venv, but {VENV_PY} doesn't exist - that "
+                  "Python looks non-standard (bundled inside another app?); try a plain install from "
+                  "python.org instead)")
+            venv_ok = False
+        elif not venv_ok:
             print("failed.")
+        if not venv_ok:
             _manual()
             sys.exit(1)
         print("done")
