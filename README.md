@@ -8,7 +8,9 @@ Hermes is model-agnostic (via LiteLLM) — Gemini by default, but any provider w
 
 ## Quick start
 
-**Easiest:** double-click **`Hermes.command`** (macOS) or **`Hermes.bat`** (Windows) in this folder.
+**Easiest:** double-click **`Hermes.command`** (macOS), **`Hermes.bat`** (Windows), or **`Hermes.sh`**
+(Linux - may need "Allow executing as program" in your file manager first, or run `./Hermes.sh`) in
+this folder.
 A console window opens (that's the app's server — see "About that console window" below) and your
 browser opens to the app.
 
@@ -96,7 +98,7 @@ works with the same Tailor pipeline. Pick one when Tailor asks, or build one exp
 ## Project layout
 ```
 hermes/
-├── Hermes.command · Hermes.bat     double-click launchers (macOS / Windows)
+├── Hermes.command · Hermes.bat · Hermes.sh     double-click launchers (macOS / Windows / Linux)
 ├── code/
 │   ├── app.py             web UI entry point (runs the server, idle-shutdown)
 │   ├── web/                the web UI, one screen per file
