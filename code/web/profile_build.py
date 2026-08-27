@@ -8,7 +8,10 @@ from web.notify import notify
 from web.progress import busy
 
 
-def build_profile_button(push_line, result_box, save_btn, label_in):
+def build_profile_button(push_line, result_box, save_btn, label_in, register, others, extra_freeze):
+    """register/others/extra_freeze come from profile_screen's shared screen_lock() - so a Build here
+    locks out Save/Delete (and vice versa), plus the track-picking fields a Build shouldn't be able to
+    run underneath (switching tracks mid-build would misattribute the result to the wrong one)."""
     from nicegui import ui, run
     import factbook
     import profile
@@ -24,7 +27,7 @@ def build_profile_button(push_line, result_box, save_btn, label_in):
         result_box.set_visibility(False)
         save_btn.set_visibility(False)
         push_line("Extracting blocks / positioning / identity from the factbook...")
-        async with busy(build_btn):
+        async with busy(build_btn, *others(build_btn), *extra_freeze):
             try:
                 data = await run.io_bound(profile.generate, open(factbook.OUT).read())
                 result_box.value = json.dumps(data, ensure_ascii=False, indent=2)
@@ -37,5 +40,5 @@ def build_profile_button(push_line, result_box, save_btn, label_in):
                 push_line(f"! {e}")
                 notify(f"Failed: {e}", type="negative")
 
-    build_btn = ui.button("Build profile", on_click=build_profile).props("unelevated color=primary")
+    build_btn = register(ui.button("Build profile", on_click=build_profile).props("unelevated color=primary"))
     return build_btn

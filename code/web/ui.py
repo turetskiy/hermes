@@ -6,8 +6,8 @@ the whole session - every screen gets a push_line callback into it instead of bu
 import os
 
 import paths
-from web.brand import header
 from web.progress import init_bar, progress_log
+from web.topbar import build_topbar
 
 
 def setup():
@@ -40,11 +40,13 @@ def setup():
         def show(i):
             for j, s in enumerate(screens):
                 s.set_visibility(j == i)
+            sync_active_step(i)
 
         with ui.column().classes("w-full max-w-3xl mx-auto px-6 py-4 gap-4").style("padding-bottom: 14rem"):
-            header()
+            model_lbl, sync_active_step = build_topbar(show)
+            page_state["model_label"] = model_lbl
             screens.append(_welcome(show))
-            screens.append(setup_screen(show, push_line))
+            screens.append(setup_screen(show, push_line, page_state))
             screens.append(material_screen(show, push_line))
             screens.append(profile_screen(show, push_line, page_state))
             screens.append(tailor_screen(show, push_line, page_state))

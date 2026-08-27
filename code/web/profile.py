@@ -8,6 +8,7 @@ import json
 from web.confirm import build_confirm
 from web.notify import notify
 from web.profile_build import build_profile_button
+from web.progress import busy, screen_lock
 
 NEW_TRACK = ""  # sentinel value in the dropdown for "start a new track" (never a real track id)
 
@@ -27,12 +28,16 @@ def profile_screen(show, push_line, page_state):
                     "and your **identity** - the data Tailor assembles resumes from. Review the result "
                     "below (it's plain JSON, editable) before saving.")
 
+        # Build / Save / Delete all touch the same track's files - none should run while another is
+        # mid-flight; register() each, then busy(btn, *others(btn), ...) below locks out the rest.
+        register, others = screen_lock()
+
         with ui.row().classes("w-full items-end gap-2"):
             track_select = ui.select(_track_options(), label="Existing tracks", value=NEW_TRACK) \
                 .classes("flex-1 min-w-0")
-            delete_btn = ui.button(icon="delete", on_click=lambda: delete_selected_track()) \
-                .props("flat round dense color=negative").tooltip("Delete this track")
-            delete_btn.disable()
+            delete_btn = register(ui.button(icon="delete", on_click=lambda: delete_selected_track())
+                                   .props("flat round dense color=negative").tooltip("Delete this track"))
+            delete_btn.set_visibility(False)
 
         confirm = build_confirm()
 
@@ -46,10 +51,12 @@ def profile_screen(show, push_line, page_state):
 
         def sync_next_enabled():
             # Next/Delete only make sense once a real, already-saved track is selected - "(new track)"
-            # or a freshly-built-but-unsaved result don't count, so both stay disabled until then
+            # or a freshly-built-but-unsaved result don't count. Delete is hidden outright rather than
+            # just disabled when there's nothing to delete - a greyed-out trash icon next to an empty
+            # picker reads as broken, not as "not applicable yet".
             has_track = bool(track_select.value)
             next_btn.enable() if has_track else next_btn.disable()
-            delete_btn.enable() if has_track else delete_btn.disable()
+            delete_btn.set_visibility(has_track)
 
         def load_selected_track(e):
             track_id = e.value
@@ -77,17 +84,18 @@ def profile_screen(show, push_line, page_state):
             if not await confirm(f"Delete track '{track_id}'? Its saved blocks stay in the pool, "
                                   "just unassigned - nothing here deletes a block.", "Delete"):
                 return
-            profile.delete_track(track_id)
-            track_select.set_options(_track_options(), value=NEW_TRACK)
-            track_in.value, label_in.value = "base", ""
-            result_box.set_visibility(False)
-            save_btn.set_visibility(False)
-            sync_next_enabled()
-            tailor_select = page_state.get("tailor_track_select")
-            if tailor_select:  # auto-clears if it was pointing at the track we just deleted
-                tailor_select.set_options(profile_store.track_picker_options())
-            push_line(f"Deleted track '{track_id}' (its blocks remain in the pool, unassigned).")
-            notify(f"Deleted track '{track_id}'", type="positive")
+            async with busy(delete_btn, *others(delete_btn), track_select):
+                profile.delete_track(track_id)
+                track_select.set_options(_track_options(), value=NEW_TRACK)
+                track_in.value, label_in.value = "base", ""
+                result_box.set_visibility(False)
+                save_btn.set_visibility(False)
+                sync_next_enabled()
+                tailor_select = page_state.get("tailor_track_select")
+                if tailor_select:  # auto-clears if it was pointing at the track we just deleted
+                    tailor_select.set_options(profile_store.track_picker_options())
+                push_line(f"Deleted track '{track_id}' (its blocks remain in the pool, unassigned).")
+                notify(f"Deleted track '{track_id}'", type="positive")
 
         async def save_profile():
             try:
@@ -102,17 +110,20 @@ def profile_screen(show, push_line, page_state):
             if track_id in dict(profile_store.list_tracks()) and not await confirm(
                     f"Track '{track_id}' already exists - overwrite it?", "Overwrite"):
                 return
-            label = label_in.value.strip() or data.get("roles", {}).get("role1", {}).get("title", "Resume")
-            n = profile.write_profile(data, track_id, label)
-            track_select.set_options(_track_options(), value=track_id)
-            sync_next_enabled()  # explicit - don't rely on the programmatic value-set above firing on_value_change
-            push_line(f"Saved profile: identity.json, blocks.json ({n} blocks), positioning.json (track '{track_id}')")
-            notify(f"Saved ({n} blocks, track '{track_id}')", type="positive")
+            async with busy(save_btn, *others(save_btn), track_select, track_in, label_in):
+                label = label_in.value.strip() or data.get("roles", {}).get("role1", {}).get("title", "Resume")
+                n = profile.write_profile(data, track_id, label)
+                track_select.set_options(_track_options(), value=track_id)
+                sync_next_enabled()  # explicit - don't rely on the value-set above firing on_value_change
+                push_line(f"Saved profile: identity.json, blocks.json ({n} blocks), "
+                          f"positioning.json (track '{track_id}')")
+                notify(f"Saved ({n} blocks, track '{track_id}')", type="positive")
 
-        save_btn = ui.button("Save profile", on_click=save_profile)
+        save_btn = register(ui.button("Save profile", on_click=save_profile))
         save_btn.set_visibility(False)
 
-        build_profile_button(push_line, result_box, save_btn, label_in)
+        build_profile_button(push_line, result_box, save_btn, label_in, register, others,
+                              [track_select, track_in, label_in, delete_btn])
 
         def go_next():
             # track_select.value is always a real, already-saved track here - Next is disabled otherwise

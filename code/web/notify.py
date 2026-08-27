@@ -5,5 +5,8 @@ one shows at the top, bigger text, and a close button so it doesn't vanish befor
 
 def notify(message, type=None):  # noqa: A002 - "type" matches ui.notify's own parameter name
     from nicegui import ui
-    ui.notify(message, type=type, position="top", close_button=True, timeout=6000,
-             classes="text-base", multi_line=True)
+    try:
+        ui.notify(message, type=type, position="top", close_button=True, timeout=6000,
+                 classes="text-base", multi_line=True)
+    except RuntimeError:
+        pass  # the browser tab (or its client) is already gone - nothing left to notify

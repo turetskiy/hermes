@@ -6,6 +6,14 @@ server, and shuts it down once the last browser tab disconnects (so this process
 double-click Hermes.command / Hermes.bat."""
 import os
 import sys
+import warnings
+
+# Before anything else imports urllib3 (transitively, via litellm) - some Python builds (notably
+# macOS's system one) link against LibreSSL instead of OpenSSL 1.1.1+, which urllib3 warns about on
+# import; harmless here since only litellm's HTTPS calls to the model provider use it, but it looks
+# like an error to someone who just wants to double-click a launcher and have it work quietly.
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=r".*OpenSSL.*")
 
 if __package__ in (None, ""):  # allow `python code/app.py`
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

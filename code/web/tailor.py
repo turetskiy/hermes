@@ -8,7 +8,7 @@ import os
 
 import paths
 from web.notify import notify
-from web.progress import busy
+from web.progress import busy, screen_lock
 from web.tailor_export import export_controls
 
 
@@ -19,6 +19,12 @@ def tailor_screen(show, push_line, page_state):
     from content.pipeline import run_auto
     from services import llm, vacancy
     from templating import build_template
+
+    # Fetch / Tailor / Build .docx / Apply feedback all touch the same result_box (or fields feeding
+    # it) and none should run while another is mid-flight - register() each as it's created (build_docx
+    # and feedback's buttons live in tailor_export.py, wired in via export_controls() below), then
+    # others(btn) lists every sibling to freeze alongside btn's own operation.
+    register, others = screen_lock()
 
     with ui.column().classes("gap-3") as scr:
         ui.markdown("Pick a template and a track, optionally point at a vacancy, and the model "
@@ -37,7 +43,7 @@ def tailor_screen(show, push_line, page_state):
 
         with ui.row().classes("w-full items-end gap-3"):
             url_in = ui.input("Vacancy URL (optional)").classes("flex-1")
-            fetch_btn = ui.button("Fetch").props("outline")
+            fetch_btn = register(ui.button("Fetch").props("outline"))
         jd_box = ui.textarea("Vacancy text (leave blank for a baseline resume)").props("rows=8").classes("w-full")
 
         with ui.row().classes("w-full gap-3"):
@@ -55,7 +61,7 @@ def tailor_screen(show, push_line, page_state):
                 notify("Paste a URL first", type="warning")
                 return
             push_line(f"Fetching {url} ...")
-            async with busy(fetch_btn):
+            async with busy(fetch_btn, *others(fetch_btn), url_in, jd_box):
                 text = await run.io_bound(vacancy.fetch_url, url)
                 if text and len(text) > 200:
                     jd_box.value = text
@@ -67,7 +73,7 @@ def tailor_screen(show, push_line, page_state):
         fetch_btn.on_click(fetch)
 
         build_docx_btn, download_btn, feedback_in, feedback_btn, export_state = export_controls(
-            push_line, result_box, style_select, track_select)
+            push_line, result_box, style_select, track_select, register, others)
 
         async def tailor():
             if not llm.has_key():
@@ -83,7 +89,8 @@ def tailor_screen(show, push_line, page_state):
             feedback_in.set_visibility(False)
             feedback_btn.set_visibility(False)
             export_state["docx_path"] = None
-            async with busy(tailor_btn):
+            async with busy(tailor_btn, *others(tailor_btn), style_select, track_select, url_in,
+                            jd_box, depth_select, extra_in):
                 try:
                     content = await run.io_bound(assemble.assemble, track_id)
                     jd = jd_box.value.strip()
@@ -106,7 +113,7 @@ def tailor_screen(show, push_line, page_state):
                     push_line(f"! {e}")
                     notify(f"Failed: {e}", type="negative")
 
-        tailor_btn = ui.button("Tailor", on_click=tailor).props("unelevated color=primary")
+        tailor_btn = register(ui.button("Tailor", on_click=tailor).props("unelevated color=primary"))
         with ui.row():
             ui.button("Back", on_click=lambda: show(3)).props("flat")
     return scr

@@ -8,16 +8,28 @@ import asyncio
 import time
 from contextlib import asynccontextmanager
 
-_state = {"bar": None, "busy_count": 0}
+_state = {"bar": None, "busy_count": 0, "stop_btn": None, "current_task": None}
 MIN_BUSY_SECONDS = 0.7  # let one indeterminate animation cycle finish, so a fast call doesn't look glitchy
 
 
 def init_bar():
-    """Build the shared indeterminate progress bar (called once, in web/ui.py's footer)."""
+    """Build the shared indeterminate progress bar + its Stop button (called once, in web/ui.py's
+    footer). One handler installed once (reads current_task from _state) rather than re-registered
+    per busy() call, which would otherwise stack duplicate handlers - same fix as web/setup_keypanel.py."""
     from nicegui import ui
-    bar = ui.linear_progress(value=0).props("indeterminate").classes("w-full")
+
+    def stop_current():
+        task = _state.get("current_task")
+        if task and not task.done():
+            task.cancel()
+
+    with ui.row().classes("w-full items-center gap-2"):
+        bar = ui.linear_progress(value=0).props("indeterminate").classes("flex-1 min-w-0")
+        stop_btn = ui.button("Stop", icon="stop", on_click=stop_current).props("dense outline color=negative")
     bar.set_visibility(False)
+    stop_btn.set_visibility(False)
     _state["bar"] = bar
+    _state["stop_btn"] = stop_btn
     return bar
 
 
@@ -46,9 +58,12 @@ def progress_log():
     def push_line(text):
         warn = text.startswith("! ")
         color = "text-amber-400" if warn else "text-slate-300"
-        with log_col:
-            ui.label(text).classes(f"font-mono text-xs {color} whitespace-pre-wrap break-words")
-        log_area.scroll_to(percent=1.0)
+        try:
+            with log_col:
+                ui.label(text).classes(f"font-mono text-xs {color} whitespace-pre-wrap break-words")
+            log_area.scroll_to(percent=1.0)
+        except RuntimeError:
+            pass  # the browser tab (or its client) is already gone - nothing left to log to
 
     sink = UiSink()
     timer = ui.timer(0.1, lambda: [push_line(sink.buf.pop(0)) for _ in range(len(sink.buf))])
@@ -56,27 +71,78 @@ def progress_log():
     return push_line, sink, timer
 
 
+def _safe(widget, method):
+    """Best-effort .disable()/.enable() - a widget passed to freeze can be a dynamically-recreated
+    one (e.g. Material's per-refresh "Apply answers" button) that's since been torn down; a stale
+    reference must not crash the whole busy() block over a widget nobody can see anymore anyway."""
+    try:
+        getattr(widget, method)()
+    except RuntimeError:
+        pass
+
+
+def screen_lock():
+    """A per-screen registry of action buttons that must never run concurrently (Fetch/Tailor/Build
+    .docx/Apply feedback all touch the same result, for instance). register() each as it's created;
+    others(btn) - called from inside the click handler, so by then every sibling is registered even
+    if defined later in the file - lists every OTHER registered button, to pass into busy() as extra
+    freeze targets so ANY one of them running locks out ALL the others, not just its own button."""
+    registered = []
+
+    def register(btn):
+        registered.append(btn)
+        return btn
+
+    def others(btn):
+        return [b for b in registered if b is not btn]
+
+    return register, others
+
+
 @asynccontextmanager
-async def busy(button):
-    """Disable a button, show its built-in spinner, AND light the shared progress bar while the
-    wrapped work runs - so it can't be double-clicked and it's unmistakable something is happening.
-    Stays up for at least MIN_BUSY_SECONDS even if the work finishes sooner, so a fast response
-    doesn't cut the indeterminate bar's animation off mid-cycle (which reads as a glitch, not motion).
-    Nests safely (busy_count) in case two operations ever overlap."""
-    button.disable()
+async def busy(button, *freeze):
+    """Disable a button, show its built-in spinner, AND light the shared progress bar + Stop button
+    while the wrapped work runs - so it can't be double-clicked and it's unmistakable something is
+    happening. `freeze` is any other widgets that must not be touched meanwhile either - a sibling
+    action button that could race this one (see screen_lock()), or a field this operation reads only
+    partway through rather than just at the start, so editing it mid-flight can't produce a mismatch
+    between what's shown and what's actually used. Stays up for at least MIN_BUSY_SECONDS even if the
+    work finishes sooner, so a fast response doesn't cut the indeterminate bar's animation off mid-
+    cycle. Nests safely (busy_count) in case two operations ever overlap. Stop cancels the awaiting
+    task, so the UI moves on immediately - but Python can't forcibly kill the background thread the
+    actual model call runs in, so a cancelled request may keep running unseen for a few more seconds;
+    its result is simply discarded."""
+    _safe(button, "disable")
     button.props("loading")
+    for w in freeze:
+        _safe(w, "disable")
     _state["busy_count"] += 1
+    _state["current_task"] = asyncio.current_task()
     if _state["bar"]:
         _state["bar"].set_visibility(True)
+    if _state["stop_btn"]:
+        _state["stop_btn"].set_visibility(True)
     started = time.monotonic()
+    cancelled = False
     try:
         yield
+    except asyncio.CancelledError:
+        cancelled = True
     finally:
         remaining = MIN_BUSY_SECONDS - (time.monotonic() - started)
-        if remaining > 0:
+        if remaining > 0 and not cancelled:
             await asyncio.sleep(remaining)
         _state["busy_count"] -= 1
-        if _state["bar"] and _state["busy_count"] <= 0:
-            _state["bar"].set_visibility(False)
+        if _state["busy_count"] <= 0:
+            if _state["bar"]:
+                _state["bar"].set_visibility(False)
+            if _state["stop_btn"]:
+                _state["stop_btn"].set_visibility(False)
+        _state["current_task"] = None
         button.props(remove="loading")
-        button.enable()
+        _safe(button, "enable")
+        for w in freeze:
+            _safe(w, "enable")
+    if cancelled:
+        from services import report
+        report.warn("  Cancelled.")

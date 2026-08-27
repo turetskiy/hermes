@@ -23,9 +23,25 @@ PROMPTS = json.load(open(os.path.join(HERE, "prompts.json")))
 TRANSIENT = ("overloaded", "unavailable", "503", "resource_exhausted", "429",
              "try again", "deadline", "timeout", "temporarily", "rate limit")
 
+# A single request that's simply too big for the model's per-minute token budget (e.g. Groq's "Request
+# too large ... reduce your message size and try again") also matches "try again"/"rate limit" above,
+# but waiting and resending the SAME request can never succeed - checked first so it always wins.
+NOT_TRANSIENT = ("too large", "reduce your message", "reduce your prompt")
+
 
 def _transient(e):
-    return any(m in str(e).lower() for m in TRANSIENT)
+    msg = str(e).lower()
+    if any(m in msg for m in NOT_TRANSIENT):
+        return False
+    return any(m in msg for m in TRANSIENT)
+
+
+def _short(e, limit=200):
+    """One-line excerpt of an exception's message, for the activity log - the full text always goes
+    to runlog regardless. "Model busy" alone told you nothing; this shows what the model actually
+    said, so a real logic/prompt error doesn't hide behind a generic busy-retrying message."""
+    text = " ".join(str(e).split())
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def generate(system, user, attempts=6, label=None, max_tokens=8192):
@@ -53,7 +69,7 @@ def generate(system, user, attempts=6, label=None, max_tokens=8192):
                 raise
             wait = min(2 ** attempt, 30) + random.uniform(0, 1)
             runlog.write(f"transient LLM error ({e}); retry {attempt}/{attempts - 1} in {wait:.1f}s")
-            report.warn(f"  Model busy - retrying in {wait:.0f}s ({attempt}/{attempts - 1})...")
+            report.warn(f"  Model busy ({_short(e)}) - retrying in {wait:.0f}s ({attempt}/{attempts - 1})...")
             time.sleep(wait)
 
 
@@ -86,13 +102,16 @@ def _extract_json(text):
 
 
 def call_block(prompt_key, fields, mock, fallback):
-    """Tailor one block: build prompt -> call -> parse. On mock/error, return fallback."""
+    """Tailor one block: build prompt -> call -> parse. On mock/error, return fallback. A tailoring run
+    can call this ~30 times (one per resume block), so generate()'s own retry budget is capped at 3
+    (2 retries, ~6s) here instead of the default 5 - during a sustained provider slowdown, every block
+    inheriting the full ladder compounds into many independent multi-minute waits back to back."""
     if mock:
         return fallback
     user = _build_prompt(prompt_key, fields)
     for attempt in (1, 2):
         try:
-            raw = generate(PROMPTS["guardrails"], user, label=f"{prompt_key} attempt {attempt}")
+            raw = generate(PROMPTS["guardrails"], user, label=f"{prompt_key} attempt {attempt}", attempts=3)
             return _extract_json(raw)
         except Exception as e:  # noqa: BLE001
             runlog.write(f"[{prompt_key}] attempt {attempt} JSON error: {e}")

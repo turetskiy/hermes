@@ -4,10 +4,10 @@ web/progress.py) via push_line; Build/Apply buttons disable with a spinner while
 import os
 
 import paths
-from services.osutil import open_path
 from web.confirm import build_confirm
+from web.material_files import build_file_manager
 from web.notify import notify
-from web.progress import busy
+from web.progress import busy, screen_lock
 
 
 def material_screen(show, push_line):
@@ -17,54 +17,14 @@ def material_screen(show, push_line):
 
     inbox = os.path.join(paths.DATA, "inbox")
 
-    def listed_files():
-        return [f for f in sorted(os.listdir(inbox)) if f.lower() != "readme.txt" and not f.startswith(".")]
-
-    starts_empty = not listed_files()  # nudge the upload control open only when the inbox is empty
-
     confirm = build_confirm()
+    # Build / Apply answers / Save all touch the factbook - none should run while another is
+    # mid-flight; register() each, then busy(btn, *others(btn), ...) below locks out the rest.
+    register, others = screen_lock()
 
     with ui.column().classes("gap-3") as scr:
         ui.markdown(f"Drop your CVs / notes / docs below, or straight into `{inbox}`.")
-
-        files_table = ui.table(
-            rows=[], row_key="name",
-            columns=[
-                {"name": "name", "label": "Name", "field": "name", "align": "left"},
-                {"name": "type", "label": "Type", "field": "type", "align": "left"},
-            ],
-        ).classes("w-full").props("dense flat bordered").style("height: 12rem")
-
-        def refresh_files():
-            rows = []
-            for f in listed_files():
-                if os.path.isdir(os.path.join(inbox, f)):
-                    rows.append({"name": f, "type": "Folder"})
-                else:
-                    ext = os.path.splitext(f)[1].lstrip(".").upper()
-                    rows.append({"name": f, "type": ext or "File"})
-            files_table.rows = rows
-
-        def on_upload(e):
-            with open(os.path.join(inbox, e.name), "wb") as f:
-                f.write(e.content.read())
-            refresh_files()
-            notify(f"Added {e.name}")
-
-        def toggle_upload():
-            upload_ctl.set_visibility(not upload_ctl.visible)
-            add_files_btn.set_text("Hide upload" if upload_ctl.visible else "Add files")
-
-        with ui.row():
-            add_files_btn = ui.button("Hide upload" if starts_empty else "Add files",
-                                       on_click=toggle_upload).props("outline")
-            ui.button("Open inbox folder", on_click=lambda: open_path(inbox)).props("outline")
-
-        upload_ctl = ui.upload(on_upload=on_upload, auto_upload=True, multiple=True)
-        upload_ctl.props("flat bordered").classes("w-full")
-        upload_ctl.set_visibility(starts_empty)
-
-        refresh_files()
+        add_files_btn, upload_ctl = build_file_manager(inbox)
         ui.separator()
 
         fb_box = ui.textarea("Factbook (review, then Save)").props("rows=18").classes("w-full")
@@ -95,7 +55,7 @@ def material_screen(show, push_line):
                         notify("Type an answer for at least one question first", type="warning")
                         return
                     push_line(f"Applying {len(qa)} answer(s) to the factbook...")
-                    async with busy(apply_btn):
+                    async with busy(apply_btn, *others(apply_btn)):
                         try:
                             fb_box.value = await run.io_bound(factbook.resolve_gaps, fb_box.value, qa)
                             refresh_gaps()
@@ -104,23 +64,16 @@ def material_screen(show, push_line):
                             push_line(f"! {e}")
                             notify(f"Failed: {e}", type="negative")
 
-                apply_btn = ui.button("Apply answers", on_click=apply_answers).props("unelevated color=primary")
+                apply_btn = register(ui.button("Apply answers", on_click=apply_answers)
+                                      .props("unelevated color=primary"))
 
         async def save_fb():
             if os.path.exists(factbook.OUT) and not await confirm(
                     "This overwrites the existing factbook.md - continue?", "Overwrite"):
                 return
-            factbook.write(fb_box.value)
-            notify("Saved to ~/Hermes/data/factbook.md", type="positive")
-
-        save_btn = ui.button("Save factbook", on_click=save_fb)
-        save_btn.set_visibility(False)
-
-        if os.path.exists(factbook.OUT):  # show a factbook from an earlier session, not just a fresh Build
-            fb_box.value = open(factbook.OUT).read()
-            fb_box.set_visibility(True)
-            save_btn.set_visibility(True)
-            refresh_gaps()
+            async with busy(save_btn, *others(save_btn)):
+                factbook.write(fb_box.value)
+                notify("Saved to ~/Hermes/data/factbook.md", type="positive")
 
         async def build_fb():
             if not llm.has_key():
@@ -130,7 +83,7 @@ def material_screen(show, push_line):
             save_btn.set_visibility(False)
             gaps_box.set_visibility(False)
             push_line("Building factbook from the inbox...")
-            async with busy(build_btn):
+            async with busy(build_btn, *others(build_btn), add_files_btn, upload_ctl):
                 try:
                     fb_box.value = await run.io_bound(factbook.build, inbox)
                     fb_box.set_visibility(True)
@@ -141,7 +94,17 @@ def material_screen(show, push_line):
                     push_line(f"! {e}")
                     notify(f"Failed: {e}", type="negative")
 
-        build_btn = ui.button("Build factbook", on_click=build_fb).props("unelevated color=primary")
+        with ui.row():
+            build_btn = register(ui.button("Build factbook", on_click=build_fb).props("unelevated color=primary"))
+            save_btn = register(ui.button("Save factbook", on_click=save_fb))
+        save_btn.set_visibility(False)
+
+        if os.path.exists(factbook.OUT):  # show a factbook from an earlier session, not just a fresh Build
+            fb_box.value = open(factbook.OUT).read()
+            fb_box.set_visibility(True)
+            save_btn.set_visibility(True)
+            refresh_gaps()
+
         with ui.row():
             ui.button("Back", on_click=lambda: show(1)).props("flat")
             ui.button("Next", on_click=lambda: show(3))

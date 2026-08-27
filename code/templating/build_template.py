@@ -24,6 +24,7 @@ if __package__ in (None, ""):  # allow `python code/templating/build_template.py
 import docx
 
 import paths
+from templating import custom_templates
 from templating import tpl_common as C
 from templating.tpl_skeleton import build_skeleton
 
@@ -101,7 +102,9 @@ THEMES = {"ledger": LEDGER, "column": COLUMN, "gazette": GAZETTE}
 
 
 def list_styles():
-    return list(THEMES)
+    """The 3 built-in styles, plus any custom .docx template dropped into data/ (see
+    custom_templates.py) - discovered live, so a newly-added file shows up without a restart."""
+    return list(THEMES) + custom_templates.list_custom()
 
 
 def _write_meta(t):
@@ -116,7 +119,7 @@ def _write_meta(t):
 
 def build(style):
     if style not in THEMES:
-        raise SystemExit(f"unknown style '{style}'. Known: {list_styles()}")
+        return custom_templates.build(style, TEMPLATE_PATH, META_PATH)
     t = {**THEMES[style], "identity": _identity()}
     doc = docx.Document()
     C.setup_page(doc, t["margins"])

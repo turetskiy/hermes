@@ -7,6 +7,11 @@ shows a short intro and an arrow-key menu. New users just run:  python3 code/her
 import os
 import subprocess
 import sys
+import warnings
+
+# see app.py for why: suppresses urllib3's harmless LibreSSL warning before litellm ever imports it
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=r".*OpenSSL.*")
 
 import bootstrap
 import paths

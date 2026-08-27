@@ -9,9 +9,11 @@ from web.notify import notify
 from web.progress import busy
 
 
-def export_controls(push_line, result_box, style_select, track_select):
+def export_controls(push_line, result_box, style_select, track_select, register, others):
     """Build the widgets; return (build_docx_btn, download_btn, feedback_in, feedback_btn, state) so
-    tailor_screen can reset their visibility (and state["docx_path"]) when a fresh Tailor run starts."""
+    tailor_screen can reset their visibility (and state["docx_path"]) when a fresh Tailor run starts.
+    register/others come from tailor_screen's shared screen_lock(), so Build .docx and Apply feedback
+    lock out Fetch/Tailor (and each other) the same way those lock out these two."""
     from nicegui import ui, run
     from rendering import fill_template
     from services import llm
@@ -38,7 +40,7 @@ def export_controls(push_line, result_box, style_select, track_select):
             notify(f"Not valid JSON: {e}", type="negative")
             return
         push_line(f"Applying feedback: {fb[:80]}")
-        async with busy(feedback_btn):
+        async with busy(feedback_btn, *others(feedback_btn), result_box, feedback_in):
             try:
                 fields = dict(feedback=fb, content=json.dumps(data, ensure_ascii=False))
                 updated = await run.io_bound(llm.call_block, "feedback", fields, False, data)
@@ -53,7 +55,7 @@ def export_controls(push_line, result_box, style_select, track_select):
                 push_line(f"! {e}")
                 notify(f"Failed: {e}", type="negative")
 
-    feedback_btn = ui.button("Apply feedback", on_click=apply_feedback)
+    feedback_btn = register(ui.button("Apply feedback", on_click=apply_feedback))
     feedback_btn.set_visibility(False)
 
     async def build_docx():
@@ -63,7 +65,7 @@ def export_controls(push_line, result_box, style_select, track_select):
             notify(f"Not valid JSON: {e}", type="negative")
             return
         push_line("Building the resume template and document...")
-        async with busy(build_docx_btn):
+        async with busy(build_docx_btn, *others(build_docx_btn), result_box, style_select, track_select):
             try:
                 await run.io_bound(build_template.build, style_select.value)
                 track_id = track_select.value
@@ -77,7 +79,7 @@ def export_controls(push_line, result_box, style_select, track_select):
                 push_line(f"! {e}")
                 notify(f"Failed: {e}", type="negative")
 
-    build_docx_btn = ui.button("Build .docx", on_click=build_docx).props("unelevated color=primary")
+    build_docx_btn = register(ui.button("Build .docx", on_click=build_docx).props("unelevated color=primary"))
     build_docx_btn.set_visibility(False)
 
     return build_docx_btn, download_btn, feedback_in, feedback_btn, state
