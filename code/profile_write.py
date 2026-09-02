@@ -1,17 +1,16 @@
-"""Write-side of the profile: turn a generated/edited data dict into blocks.json, block_tracks.json,
-positioning.json, identity.json. Split out of profile.py (the generate/CLI side) by concern - mirrors
-profile_store.py (the read-side) on the other side of the same data."""
+"""Write-side of the profile: persist one entity at a time into blocks.json, block_tracks.json,
+positioning.json, identity.json - identity, one role's bullets, skills, or speaking/articles,
+independently, so rebuilding/saving role3 never touches role1/skills/identity. Mirrors profile_store.py
+(the read-side) on the other side of the same data."""
 import json
 import os
 
 import paths
-from content import block_tracks
+from content import block_tracks, profile_drafts
 
-# The 4 valid role slots, and a sensible starting bullet count for each when a profile is first built
-# (min'd against how many the model actually found for that role) - a Hermes-owned default, same as
-# content/tracks.py's DEFAULT_TRACK/new_track_questions use for a track built the CLI way. Not tied to
-# any template capacity - the template has none; raise a role's max_bullets freely after Build profile,
-# directly in the editable JSON, if you want more than the default.
+# The 4 valid role slots, and a sensible starting bullet count for each when a role is first built (min'd
+# against how many facts were actually assigned to it) - a Hermes-owned default, not tied to any template
+# capacity. Raise a role's max_bullets freely after building it, via web/profile_roles.py's number input.
 DEFAULT_MAX_BULLETS = {"role1": 6, "role2": 4, "role3": 3, "role4": 2}
 ROLE_SLOTS = tuple(DEFAULT_MAX_BULLETS)
 
@@ -28,33 +27,6 @@ def _flat_skills(sk):
     return [c for c in clusters if isinstance(c, dict) and (c.get("label") or c.get("items"))]
 
 
-def _positioning(data, track_id, label):
-    speaking = {s["id"]: s["text"] for s in data.get("public_speaking", []) if s.get("id") and s.get("text")}
-    articles = {a["id"]: a["text"] for a in data.get("articles", []) if a.get("id") and a.get("text")}
-    counts = {r: 0 for r in ROLE_SLOTS}
-    for b in data.get("blocks", []):
-        if b.get("role_slot") in counts:
-            counts[b["role_slot"]] += 1
-    roles = {}
-    for r, s in data.get("roles", {}).items():
-        if r not in ROLE_SLOTS:
-            continue
-        explicit = s.get("max_bullets")  # already set (a loaded track, or web/profile_bullets.py's UI,
-        # possibly 0 to deliberately drop the role) - respect it rather than silently recomputing
-        default = min(counts[r], DEFAULT_MAX_BULLETS[r]) or DEFAULT_MAX_BULLETS[r]
-        roles[r] = {"title": s.get("title", ""), "dates": s.get("dates", ""),
-                    "max_bullets": explicit if isinstance(explicit, int) else default}
-    track = {
-        "label": label, "headline": data.get("headline", ""), "summary": data.get("summary", ""),
-        "footer_title": data.get("footer_title", ""), "skills": _flat_skills(data.get("skills")),
-        "roles": roles,
-        "priorities": {"public_speaking": {"keep": list(speaking), "add_if_room": []},
-                       "articles": {"keep": list(articles), "add_if_room": []}},
-        "block_source": track_id,
-    }
-    return {"shared": {"public_speaking": speaking, "articles": articles}, "tracks": {track_id: track}}
-
-
 def _dump(name, obj):
     with open(os.path.join(paths.DATA, name), "w") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
@@ -68,45 +40,93 @@ def _load_blocks_pool():
         return {}
 
 
-def delete_track(track_id):
-    """Remove a track from positioning.json - its block_tracks.json entry goes with it (prune), but the
-    underlying blocks stay in the shared pool untouched, just unassigned; nothing here ever deletes a
-    block. Returns False if there was no such track (nothing to do)."""
-    pos_path = os.path.join(paths.DATA, "positioning.json")
+def _load_pos():
     try:
-        with open(pos_path) as f:
-            pos = json.load(f)
-    except (FileNotFoundError, ValueError):
-        return False
-    if track_id not in pos.get("tracks", {}):
-        return False
-    del pos["tracks"][track_id]
-    _dump("positioning.json", pos)
-    block_tracks.prune(pos["tracks"].keys())
-    return True
-
-
-def write_profile(data, track_id, label):
-    # compute everything first (may raise) so a bad response never leaves half-written files -
-    # fallback ids are namespaced by track_id since they're positional (b0, b1, ...) and would
-    # otherwise collide across tracks now that blocks.json is one shared, cumulative pool
-    blocks = [{"id": b.get("id") or f"{track_id}_b{i}", "role_slot": b["role_slot"],
-               "rank": b.get("rank", i + 1), "text": b.get("text", "")}
-              for i, b in enumerate(data.get("blocks", [])) if b.get("role_slot") in ROLE_SLOTS]
-    pos = _positioning(data, track_id, label)
-    try:  # keep any existing tracks; refresh shared pools + this track
         with open(os.path.join(paths.DATA, "positioning.json")) as f:
-            existing = json.load(f)
-        existing.setdefault("tracks", {}).update(pos["tracks"])
-        existing["shared"] = pos["shared"]
-        pos = existing
+            return json.load(f)
     except (FileNotFoundError, ValueError):
-        pass
-    pool = _load_blocks_pool()
-    pool.update({b["id"]: b for b in blocks})  # merge - never wipe other tracks' blocks
-    _dump("identity.json", data.get("identity", {}))
-    _dump("blocks.json", {"blocks": list(pool.values())})
+        return {"shared": {"public_speaking": {}, "articles": {}}, "tracks": {}}
+
+
+def _new_track(track_id):
+    return {"label": "", "headline": "", "summary": "", "footer_title": "", "skills": [], "roles": {},
+            "priorities": {"public_speaking": {"keep": [], "add_if_room": []},
+                            "articles": {"keep": [], "add_if_room": []}},
+            "block_source": track_id}
+
+
+def delete_track(track_id):
+    """Remove a track from positioning.json - its block_tracks.json entry and any Step-1 draft go with
+    it, but the underlying blocks stay in the shared pool untouched, just unassigned; nothing here ever
+    deletes a block. Returns False if there was no such track (nothing to do)."""
+    pos = _load_pos()
+    found = track_id in pos.get("tracks", {})
+    if found:
+        del pos["tracks"][track_id]
+        _dump("positioning.json", pos)
+        block_tracks.prune(pos["tracks"].keys())
+    profile_drafts.delete(track_id)
+    return found
+
+
+def write_identity(identity, track_id, label, headline, summary, footer_title):
+    """The Identity panel's Save: the global identity.json, plus this track's label/headline/summary/
+    footer_title in positioning.json (per-track, unlike identity itself, but grouped here since they're
+    all small text fields edited on the same panel)."""
+    _dump("identity.json", identity)
+    pos = _load_pos()
+    track = pos.setdefault("tracks", {}).setdefault(track_id, _new_track(track_id))
+    track.update(label=label, headline=headline, summary=summary, footer_title=footer_title)
     _dump("positioning.json", pos)
-    block_tracks.set_track(track_id, [b["id"] for b in blocks])
-    block_tracks.prune(pos["tracks"].keys())  # drop any leftover reference to a since-deleted track
-    return len(blocks)
+
+
+def write_role(track_id, role_slot, title, dates, blocks, max_bullets=None):
+    """Merge just this role's blocks into the shared blocks.json pool by id, and read-modify-write
+    block_tracks.json's id list for this track: drop ids no longer produced by this build AND any id
+    currently tagged this role_slot in the pool that this build no longer includes (a fact un-assigned
+    since the last build), then add this build's ids. block_tracks id ORDER carries no meaning -
+    content/assemble.py only ever treats it as a set - so this is safe. Returns the block count."""
+    new_blocks = [{"id": b["id"], "role_slot": role_slot, "rank": i + 1, "text": b["text"]}
+                  for i, b in enumerate(blocks)]
+    new_ids = {b["id"] for b in new_blocks}
+    pool = _load_blocks_pool()
+    current_ids = block_tracks.ids_for_track(track_id)
+    kept = [i for i in current_ids
+            if i not in new_ids and pool.get(i, {}).get("role_slot") != role_slot]
+    block_tracks.set_track(track_id, kept + [b["id"] for b in new_blocks])
+    pool.update({b["id"]: b for b in new_blocks})
+    _dump("blocks.json", {"blocks": list(pool.values())})
+
+    pos = _load_pos()
+    track = pos.setdefault("tracks", {}).setdefault(track_id, _new_track(track_id))
+    existing = track.get("roles", {}).get(role_slot, {}).get("max_bullets")
+    default = min(len(new_blocks), DEFAULT_MAX_BULLETS[role_slot]) or DEFAULT_MAX_BULLETS[role_slot]
+    track.setdefault("roles", {})[role_slot] = {
+        "title": title, "dates": dates,
+        "max_bullets": max_bullets if isinstance(max_bullets, int) else (
+            existing if isinstance(existing, int) else default),
+    }
+    _dump("positioning.json", pos)
+    return len(new_blocks)
+
+
+def write_skills(track_id, skills):
+    pos = _load_pos()
+    track = pos.setdefault("tracks", {}).setdefault(track_id, _new_track(track_id))
+    track["skills"] = _flat_skills(skills)
+    _dump("positioning.json", pos)
+
+
+def write_speaking_articles(track_id, speaking, articles):
+    """Deterministic pass-through (no LLM involved) - speaking/articles are [{id, text}] facts tagged
+    in the Selection step, formatted straight into the shared cross-track pool + this track's keep list."""
+    pos = _load_pos()
+    track = pos.setdefault("tracks", {}).setdefault(track_id, _new_track(track_id))
+    shared = pos.setdefault("shared", {"public_speaking": {}, "articles": {}})
+    shared.setdefault("public_speaking", {}).update({s["id"]: s["text"] for s in speaking})
+    shared.setdefault("articles", {}).update({a["id"]: a["text"] for a in articles})
+    track["priorities"] = {
+        "public_speaking": {"keep": [s["id"] for s in speaking], "add_if_room": []},
+        "articles": {"keep": [a["id"] for a in articles], "add_if_room": []},
+    }
+    _dump("positioning.json", pos)

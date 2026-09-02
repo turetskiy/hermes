@@ -1,12 +1,17 @@
 """The Material screen: drop files into the inbox, then Build factbook, review/answer its open
-questions, and save the result. Progress goes to the shared page-level log (web/ui.py /
-web/progress.py) via push_line; Build/Apply buttons disable with a spinner while working."""
+questions, add facts one at a time, and save the result. Progress goes to the shared page-level log
+(web/ui.py / web/progress.py) via push_line; Build/Apply buttons disable with a spinner while working.
+Factbook display defaults to a rendered markdown view; the Edit switch swaps in the raw textarea
+(fb_box), which stays the single source of truth throughout - the view is just its rendering, kept in
+sync via sync_view() after every write (build, gap answers, or an added fact)."""
 import os
 
 import paths
 from services import cancel
 from web.confirm import build_confirm
+from web.material_facts import build_add_fact
 from web.material_files import build_file_manager
+from web.material_gaps import build_gaps
 from web.notify import notify
 from web.progress import busy, screen_lock
 
@@ -19,8 +24,8 @@ def material_screen(show, push_line):
     inbox = os.path.join(paths.DATA, "inbox")
 
     confirm = build_confirm()
-    # Build / Apply answers / Save all touch the factbook - none should run while another is
-    # mid-flight; register() each, then busy(btn, *others(btn), ...) below locks out the rest.
+    # Build / Apply answers / Save / Polish (add-fact) all touch the factbook - none should run while
+    # another is mid-flight; register() each, then busy(btn, *others(btn), ...) below locks out the rest.
     register, others = screen_lock()
 
     with ui.column().classes("gap-3") as scr:
@@ -28,45 +33,34 @@ def material_screen(show, push_line):
         add_files_btn, upload_ctl = build_file_manager(inbox)
         ui.separator()
 
-        fb_box = ui.textarea("Factbook (review, then Save)").props("rows=18").classes("w-full")
+        fb_view = ui.markdown().classes("w-full")
+        fb_view.set_visibility(False)
+        fb_box = ui.textarea("Factbook (Markdown source)").props("rows=18").classes("w-full")
         fb_box.set_visibility(False)
-        gaps_box = ui.column().classes("w-full gap-2")
-        gaps_box.set_visibility(False)
+        edit_switch = ui.switch("Edit")
+        edit_switch.set_visibility(False)
 
-        def refresh_gaps():
-            gaps_box.clear()
-            gaps = factbook.parse_gaps(fb_box.value)
-            gaps_box.set_visibility(bool(gaps))
-            if not gaps:
-                return
-            with gaps_box:
-                ui.label(f"Open questions ({len(gaps)}) - answer any you can, then Apply:").classes("font-bold")
-                fields = []
-                for g in gaps:
-                    # the question is a wrapping label, not the input's floating label (which Quasar
-                    # truncates to one line instead of wrapping) - the input itself is a plain answer box
-                    with ui.column().classes("w-full gap-1"):
-                        ui.label(g).classes("text-sm whitespace-pre-wrap break-words")
-                        inp = ui.input(placeholder="Your answer").classes("w-full")
-                    fields.append((g, inp))
+        def sync_view():
+            """Re-render the view from fb_box.value (the single source of truth) and show whichever of
+            view/edit is currently selected - call after ANY fb_box.value write."""
+            fb_view.set_content(fb_box.value)
+            fb_box.set_visibility(edit_switch.value)
+            fb_view.set_visibility(not edit_switch.value)
 
-                async def apply_answers():
-                    qa = [(g, inp.value.strip()) for g, inp in fields if inp.value.strip()]
-                    if not qa:
-                        notify("Type an answer for at least one question first", type="warning")
-                        return
-                    push_line(f"Applying {len(qa)} answer(s) to the factbook...")
-                    async with busy(apply_btn, *others(apply_btn)):
-                        try:
-                            fb_box.value = await cancel.io_bound(factbook.resolve_gaps, fb_box.value, qa)
-                            refresh_gaps()
-                            notify("Factbook updated - review & Save", type="positive")
-                        except Exception as e:  # noqa: BLE001
-                            push_line(f"! {e}")
-                            notify(f"Failed: {e}", type="negative")
+        edit_switch.on_value_change(sync_view)
 
-                apply_btn = register(ui.button("Apply answers", on_click=apply_answers)
-                                      .props("unelevated color=primary"))
+        def show_factbook():
+            edit_switch.set_visibility(True)
+            sync_view()
+
+        def hide_factbook():
+            fb_box.set_visibility(False)
+            fb_view.set_visibility(False)
+            edit_switch.set_visibility(False)
+
+        add_fact_col = build_add_fact(fb_box, sync_view, push_line, register, others)
+        add_fact_col.set_visibility(False)
+        gaps_box, refresh_gaps = build_gaps(fb_box, sync_view, push_line, register, others)
 
         async def save_fb():
             if os.path.exists(factbook.OUT) and not await confirm(
@@ -80,14 +74,16 @@ def material_screen(show, push_line):
             if not llm.has_key():
                 notify("Set your API key in Setup first", type="warning")
                 return
-            fb_box.set_visibility(False)
+            hide_factbook()
+            add_fact_col.set_visibility(False)
             save_btn.set_visibility(False)
             gaps_box.set_visibility(False)
             push_line("Building factbook from the inbox...")
             async with busy(build_btn, *others(build_btn), add_files_btn, upload_ctl):
                 try:
                     fb_box.value = await cancel.io_bound(factbook.build, inbox)
-                    fb_box.set_visibility(True)
+                    show_factbook()
+                    add_fact_col.set_visibility(True)
                     save_btn.set_visibility(True)
                     refresh_gaps()
                     notify("Factbook ready - review & Save", type="positive")
@@ -102,7 +98,8 @@ def material_screen(show, push_line):
 
         if os.path.exists(factbook.OUT):  # show a factbook from an earlier session, not just a fresh Build
             fb_box.value = open(factbook.OUT).read()
-            fb_box.set_visibility(True)
+            show_factbook()
+            add_fact_col.set_visibility(True)
             save_btn.set_visibility(True)
             refresh_gaps()
 

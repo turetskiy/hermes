@@ -15,7 +15,7 @@ import paths
 VENV = os.path.join(paths.ROOT, ".venv")
 _BIN, _EXE = ("Scripts", ".exe") if os.name == "nt" else ("bin", "")  # venv layout: Windows vs POSIX
 VENV_PY = os.path.join(VENV, _BIN, "python" + _EXE)
-DEFAULT_ENTRY = os.path.join(paths.ROOT, "code", "hermes.py")
+DEFAULT_ENTRY = os.path.join(paths.ROOT, "code", "app.py")
 
 REQUIRED = [
     ("python-docx", "docx"),
@@ -25,12 +25,12 @@ REQUIRED = [
     ("pypdf", "pypdf"),
     ("nicegui", "nicegui"),  # the web UI's dependency - required so it's always auto-installed too
 ]
-INSTALL = [pkg for pkg, _ in REQUIRED] + ["prompt_toolkit"]
+INSTALL = [pkg for pkg, _ in REQUIRED]
 
 
 def _entry_point():
-    """The script that actually launched this process (hermes.py, app.py, ...), so a re-exec resumes
-    THAT script - not always hermes.py. Falls back to hermes.py if __main__ has no file (e.g. -c)."""
+    """The script that actually launched this process, so a re-exec resumes THAT script. Falls back to
+    app.py if __main__ has no file (e.g. -c)."""
     main_file = getattr(sys.modules.get("__main__"), "__file__", None)
     return os.path.abspath(main_file) if main_file else DEFAULT_ENTRY
 

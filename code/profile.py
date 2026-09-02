@@ -1,63 +1,29 @@
-#!/usr/bin/env python3
-"""
-profile.py - turn the factbook (data/factbook.md) into the data the tailor pipeline needs:
-  data/blocks.json        achievement bullets (id, role_slot, rank, text) - independent of any track
-  data/block_tracks.json  which blocks belong to which track (content/block_tracks.py owns this)
-  data/positioning.json   a base track: skills clusters, roles (title/dates), priorities + shared pools
-  data/identity.json      name / contact / education / companies - baked into the template's fixed tokens
-
-The model does the extraction under strict 'facts only' rules; this file wraps the prompt and writes files.
-
-Run:
-  python code/profile.py               # needs an API key in .env
-  python code/profile.py --mock        # write a tiny canned profile (see the flow / test)
-"""
-import argparse
+"""profile.py - turn the factbook (data/factbook.md) into the data the tailor pipeline needs, in two
+steps: propose() tags each factbook fact with a role/skills/etc. assignment (Step 1, "Selection"),
+then build_role()/build_skills() polish one entity's currently-assigned facts into final resume
+content (Step 2, "Build") - independently, so rebuilding role3 never touches role1/skills/identity.
+Used by web/profile_select.py (propose), web/profile_roles.py (build_role), web/profile_skills.py
+(build_skills), web/profile_identity.py and web/profile.py (the write_*/delete_track re-exports)."""
 import json
-import os
-import sys
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", message=r".*OpenSSL.*")
 
-import paths
-from profile_write import delete_track, write_profile  # noqa: F401  delete_track re-exported for web/profile.py
+from profile_write import (  # noqa: F401  re-exported for web/profile*.py
+    ROLE_SLOTS, delete_track, write_identity, write_role, write_skills, write_speaking_articles,
+)
 from services import llm, report
 from services.llm import PROMPTS
-from services.ui import ask
-
-SOURCE = os.path.join(paths.DATA, "factbook.md")
-
-MOCK = {
-    "identity": {"name": "Jane Doe", "contact": "City, Country - jane@x.io - linkedin.com/in/jane",
-                 "education": {"degree": "BSc Computer Science", "institution": "State University", "dates": "2008 - 2012"},
-                 "companies": {"role1": "Acme", "role2": "Globex", "role3": "Initech", "role4": "Umbrella"}},
-    "roles": {"role1": {"title": "Head of Engineering", "dates": "2021 - Present"},
-              "role2": {"title": "Engineering Manager", "dates": "2018 - 2021"},
-              "role3": {"title": "Senior Engineer", "dates": "2015 - 2018"},
-              "role4": {"title": "Engineer", "dates": "2012 - 2015"}},
-    "blocks": [{"id": "grew-team", "role_slot": "role1", "rank": 1, "text": "Grew the team from **3 to 12**."},
-               {"id": "cut-cost", "role_slot": "role1", "rank": 2, "text": "Cut infrastructure cost by **40%**."},
-               {"id": "shipped-x", "role_slot": "role2", "rank": 1, "text": "Shipped platform X on Python/Go."}],
-    "skills": [{"label": "Cloud", "items": "AWS, GCP"}, {"label": "Backend", "items": "Python, Go"},
-               {"label": "Leadership", "items": "Hiring, Roadmapping"}],
-    "public_speaking": [{"id": "talk1", "text": "Conference talk - https://example.com/talk"}],
-    "articles": [],
-    "headline": "Engineering Leader | Cloud | Teams | 12 yrs",
-    "summary": "A pragmatic engineering leader who **ships** and **grows teams**.",
-    "footer_title": "Jane Doe - Engineering Leader",
-}
 
 
-def generate(factbook):
-    """Extract the whole profile in one call. Retries once on malformed JSON (the model occasionally
-    drops a comma/brace in a response this long) - same pattern as llm.call_block(), just without a
-    fallback to fall back to, since there's no sensible partial result for a whole-profile extraction."""
-    task = PROMPTS["profile"]["task"].replace("{factbook}", factbook)
+def _generate_json(prompt_key, task, label):
+    """Shared retry-on-malformed-JSON pattern for the profile-building calls below - direct
+    llm.generate()/_extract_json(), NOT llm.call_block() (its system prompt is hardcoded to
+    JD-tailoring guardrails that don't apply to any of these no-JD calls)."""
     for attempt in (1, 2):
         try:
-            raw = llm.generate(PROMPTS["profile"]["system"], task, label=f"profile attempt {attempt}")
+            raw = llm.generate(PROMPTS[prompt_key]["system"], task, label=f"{label} attempt {attempt}")
             return llm._extract_json(raw)
         except ValueError as e:
             if attempt == 2:
@@ -65,34 +31,61 @@ def generate(factbook):
             report.warn(f"  Model returned malformed JSON ({e}); retrying...")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--mock", action="store_true", help="write a tiny canned profile (no model call)")
-    args = ap.parse_args()
-    paths.ensure_home()
-    if not os.path.exists(SOURCE):
-        sys.exit(f"No factbook at {SOURCE}. Build it first with factbook.py.")
-
-    if args.mock:
-        data = MOCK
-    else:
-        llm.load_env()
-        if not os.environ.get("GEMINI_API_KEY"):
-            sys.exit("GEMINI_API_KEY not set (put it in .env) - or run with --mock.")
-        report.step("Reading the factbook and extracting blocks / positioning / identity with the model...")
-        try:
-            data = generate(open(SOURCE).read())
-        except Exception as e:  # noqa: BLE001
-            sys.exit(f"Model call failed: {e}\nTry again in a moment.")
-
-    default_label = data.get("roles", {}).get("role1", {}).get("title", "Resume")
-    track_id = ask("Track id (snake_case)", "base")
-    label = ask("One-line label for this track", default_label)
-    n = write_profile(data, track_id, label)
-    report.info(f"\nWrote:\n  data/identity.json\n  data/blocks.json ({n} blocks)\n"
-                f"  data/block_tracks.json (track '{track_id}')\n  data/positioning.json (track '{track_id}')")
-    report.info("Now run Tailor for a full resume - or open positioning.json to fine-tune skills/roles.")
+def propose(factbook):
+    """Step 1 ('Selection'): tag every atomic factbook fact with a proposed role/skills/speaking/
+    articles/exclude assignment, plus identity + role title/dates + headline/summary/footer_title.
+    Pure - the caller persists the result via content/profile_drafts.py, not this module."""
+    task = PROMPTS["profile_select"]["task"].replace("{factbook}", factbook)
+    return _generate_json("profile_select", task, "profile_select")
 
 
-if __name__ == "__main__":
-    main()
+def _facts_for(draft, assign):
+    facts = [f for f in draft.get("facts", []) if f.get("assign") == assign]
+    return sorted(facts, key=lambda f: f.get("rank", 999))
+
+
+def build_role(draft, role_slot):
+    """Step 2: polish this role's currently-assigned draft facts (current rank order) into resume
+    bullets 1:1 - same count/order, only reworded. Returns [{id, text}]; the caller (profile_write.
+    write_role) merges these back into blocks.json by id."""
+    facts = _facts_for(draft, role_slot)
+    if not facts:
+        return []
+    role = draft.get("roles", {}).get(role_slot, {})
+    task = (PROMPTS["profile_role_build"]["task"]
+            .replace("{role_title}", role.get("title") or role_slot)
+            .replace("{role_dates}", role.get("dates", ""))
+            .replace("{facts}", json.dumps([f["text"] for f in facts], ensure_ascii=False))
+            .replace("{n}", str(len(facts))))
+    res = _generate_json("profile_role_build", task, f"profile_role_build {role_slot}")
+    bullets = res.get("bullets", [])
+    return [{"id": f["id"], "text": bullets[i] if i < len(bullets) else f["text"]}
+            for i, f in enumerate(facts)]
+
+
+def build_skills(draft):
+    """Step 2: cluster this draft's 'skills'-assigned facts into 3-6 labeled {label, items} groups."""
+    facts = _facts_for(draft, "skills")
+    if not facts:
+        return []
+    task = PROMPTS["profile_skills_build"]["task"].replace(
+        "{facts}", json.dumps([f["text"] for f in facts], ensure_ascii=False))
+    res = _generate_json("profile_skills_build", task, "profile_skills_build")
+    return res.get("skills", [])
+
+
+def build_and_save_all(draft, track_id, label):
+    """Convenience for a first full build: runs build_role for every role, plus build_skills and the
+    deterministic speaking/articles pass-through, then persists everything via profile_write's
+    granular writers. Returns the total block count written."""
+    identity = draft.get("identity", {})
+    write_identity(identity, track_id, label, draft.get("headline", ""), draft.get("summary", ""),
+                    draft.get("footer_title", ""))
+    total = 0
+    for role_slot in ROLE_SLOTS:
+        role = draft.get("roles", {}).get(role_slot, {})
+        total += write_role(track_id, role_slot, role.get("title", ""), role.get("dates", ""),
+                             build_role(draft, role_slot))
+    write_skills(track_id, build_skills(draft))
+    write_speaking_articles(track_id, _facts_for(draft, "speaking"), _facts_for(draft, "articles"))
+    return total

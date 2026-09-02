@@ -1,12 +1,12 @@
-"""Read-side access to the saved profile data (blocks.json / positioning.json / identity.json) - list
-existing tracks and reconstruct one for viewing/editing without a fresh model call. Split out of
-profile.py (the write/generate side) by concern. Which blocks belong to a track comes from
-content/block_tracks.py, not from the blocks themselves - see that module for why."""
+"""Read-side access to the saved profile data (blocks.json / positioning.json / identity.json /
+profile_drafts.json) - list existing tracks and load one entity at a time for viewing/editing, without
+a fresh model call. Split out of profile.py (the write/generate side) by concern. Which blocks belong
+to a track comes from content/block_tracks.py, not from the blocks themselves - see that module for why."""
 import json
 import os
 
 import paths
-from content import block_tracks
+from content import block_tracks, profile_drafts
 
 
 def _load(name, default):
@@ -29,32 +29,36 @@ def track_picker_options():
     return {tid: f"{label}  [{tid}]" for tid, label in list_tracks()}
 
 
-def load_track(track_id):
-    """Reconstruct a data dict (same shape as profile.generate()'s output) for an already-saved
-    track, by pulling its blocks (via block_tracks.ids_for_track), positioning fields, and identity -
-    so it can be viewed/edited without a fresh model call."""
+def load_identity():
+    """name/contact/education/companies - global, not per-track."""
+    return _load("identity.json", {})
+
+
+def load_draft(track_id):
+    """The Step 1 ('Selection') scratch state for a track, or None if it's never been Proposed."""
+    return profile_drafts.get(track_id)
+
+
+def load_track_meta(track_id):
+    """label/headline/summary/footer_title for a track, or blanks for one that doesn't exist yet."""
     pos = _load("positioning.json", {})
-    track = pos.get("tracks", {}).get(track_id)
-    if track is None:
-        raise KeyError(f"no such track: {track_id}")
+    track = pos.get("tracks", {}).get(track_id, {})
+    return {k: track.get(k, "") for k in ("label", "headline", "summary", "footer_title")}
+
+
+def load_role(track_id, role_slot):
+    """title/dates/max_bullets/bullets for one role of a saved track - bullets pulled via
+    block_tracks.ids_for_track, filtered to this role_slot, in their stored (curated) order."""
+    pos = _load("positioning.json", {})
+    role = pos.get("tracks", {}).get(track_id, {}).get("roles", {}).get(role_slot, {})
     pool = {b["id"]: b for b in _load("blocks.json", {}).get("blocks", [])}
-    blocks = [{"id": bid, "role_slot": pool[bid]["role_slot"], "rank": pool[bid]["rank"],
-               "text": pool[bid]["text"]}
-              for bid in block_tracks.ids_for_track(track_id) if bid in pool]
-    shared = pos.get("shared", {})
-    pri = track.get("priorities", {})
+    bullets = [{"id": bid, "text": pool[bid]["text"]}
+               for bid in block_tracks.ids_for_track(track_id)
+               if bid in pool and pool[bid]["role_slot"] == role_slot]
+    return {"title": role.get("title", ""), "dates": role.get("dates", ""),
+            "max_bullets": role.get("max_bullets"), "bullets": bullets}
 
-    def _pool(kind):
-        ids = pri.get(kind, {}).get("keep", [])
-        pool = shared.get(kind, {})
-        return [{"id": i, "text": pool[i]} for i in ids if i in pool]
 
-    roles = {r: {"title": s.get("title", ""), "dates": s.get("dates", "")}
-             for r, s in track.get("roles", {}).items()}
-    return {
-        "identity": _load("identity.json", {}), "roles": roles, "blocks": blocks,
-        "skills": track.get("skills", []),
-        "public_speaking": _pool("public_speaking"), "articles": _pool("articles"),
-        "headline": track.get("headline", ""), "summary": track.get("summary", ""),
-        "footer_title": track.get("footer_title", ""),
-    }
+def load_skills(track_id):
+    pos = _load("positioning.json", {})
+    return pos.get("tracks", {}).get(track_id, {}).get("skills", [])
