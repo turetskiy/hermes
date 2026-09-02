@@ -48,7 +48,7 @@ def profile_screen(show, push_line, page_state):
         result_box = ui.codemirror(language="JSON", line_wrapping=True) \
             .classes("w-full overflow-x-auto").style("height: 20rem")
         result_box.set_visibility(False)
-        bullets_row, pull_bullets = build_bullet_controls(result_box)
+        bullets_row, pull_bullets, push_bullets = build_bullet_controls(result_box)
 
         def sync_next_enabled():
             # Next/Delete only make sense once a real, already-saved track is selected - "(new track)"
@@ -131,7 +131,7 @@ def profile_screen(show, push_line, page_state):
         with ui.row():
             save_btn = register(ui.button("Save profile", on_click=save_profile))
             build_profile_button(push_line, result_box, save_btn, label_in, register, others,
-                                  [track_select, track_in, label_in, delete_btn], on_result=pull_bullets)
+                                  [track_select, track_in, label_in, delete_btn], on_result=push_bullets)
         save_btn.set_visibility(False)
 
         def go_next():

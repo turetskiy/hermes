@@ -35,9 +35,15 @@ def _positioning(data, track_id, label):
     for b in data.get("blocks", []):
         if b.get("role_slot") in counts:
             counts[b["role_slot"]] += 1
-    roles = {r: {"title": s.get("title", ""), "dates": s.get("dates", ""),
-                 "max_bullets": min(counts[r], DEFAULT_MAX_BULLETS[r]) or DEFAULT_MAX_BULLETS[r]}
-             for r, s in data.get("roles", {}).items() if r in ROLE_SLOTS}
+    roles = {}
+    for r, s in data.get("roles", {}).items():
+        if r not in ROLE_SLOTS:
+            continue
+        explicit = s.get("max_bullets")  # already set (a loaded track, or web/profile_bullets.py's UI,
+        # possibly 0 to deliberately drop the role) - respect it rather than silently recomputing
+        default = min(counts[r], DEFAULT_MAX_BULLETS[r]) or DEFAULT_MAX_BULLETS[r]
+        roles[r] = {"title": s.get("title", ""), "dates": s.get("dates", ""),
+                    "max_bullets": explicit if isinstance(explicit, int) else default}
     track = {
         "label": label, "headline": data.get("headline", ""), "summary": data.get("summary", ""),
         "footer_title": data.get("footer_title", ""), "skills": _flat_skills(data.get("skills")),
