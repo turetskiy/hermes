@@ -2,17 +2,24 @@
 Generic filler: data/template.docx + a content dict -> a final, track/vacancy-specific docx.
 Opens the template fresh each run (never mutates it). Called by assemble.py / pipeline.py.
 
-Responsibilities split three ways:
+Responsibilities split several ways:
   docx_write.py   - writing text/fonts/links into a paragraph (+ the per-style meta sidecar)
+  docx_expand.py  - cloning one anchor paragraph into N (skills clusters, role bullets)
+  docx_fixed.py   - filling NAME/CONTACT/COMPANY/EDU_* tokens from identity.json, doc-wide
   docx_layout.py  - finding/removing placeholder paragraphs and post-fill whitespace tidy
   this file       - orchestration: roles, list sections, and build()
 
 Content schema:
+  identity: {name, contact, companies:{role1..4}, education:{degree,institution,dates}} (optional -
+    a token with no matching value is left as-is; see rendering/docx_fixed.py)
   tagline: str | summary: str (**bold** ok) | skills: [{label, items}, ...]  (flat list of clusters)
   roles: {role1..role4: {title, dates, bullets:[...]} | null} | public_speaking:[...] | articles:[...]
   footer_title: str
-Empty public_speaking/articles list -> that whole section is removed. More bullets than a role's
-slot count raises (template-capacity problem to fix, not hide). Slots: role1=10/9/7/4 (role1..4).
+Empty public_speaking/articles list -> that whole section is removed; a role with no bullets is
+dropped entirely. A role's bullets have no capacity ceiling - the template needs only ONE {{ROLEn_B1}}
+anchor paragraph per role, expanded to however many bullets are given (see rendering/docx_expand.py);
+how many that actually is is a content/track decision (positioning.json's per-role max_bullets), not
+a template one.
 
 CLI:  python -m rendering.fill_template <content.json> <output.docx>      (run from code/)
 """
@@ -28,10 +35,11 @@ from docx.shared import Pt
 
 import paths
 from rendering import docx_write as W
+from rendering import docx_expand as E
+from rendering import docx_fixed as F
 from rendering import docx_layout as L
 
 TEMPLATE = os.path.join(paths.DATA, "template.docx")
-ROLE_BULLET_CAPACITY = {"role1": 10, "role2": 9, "role3": 7, "role4": 4}
 SPEAK_CAPACITY = 4
 ARTICLE_CAPACITY = 2
 
@@ -48,21 +56,12 @@ def _clusters(skills):
 
 def fill_role(doc, role_key, role_content):
     title_p = L.find_role_title_paragraph(doc, role_key)
-    capacity = ROLE_BULLET_CAPACITY[role_key]
-    bullet_placeholders = [
-        L.find_placeholder_paragraph(doc, f"{{{{{role_key.upper()}_B{i}}}}}")
-        for i in range(1, capacity + 1)
-    ]
+    bullet_anchor = L.find_placeholder_paragraph(doc, f"{{{{{role_key.upper()}_B1}}}}")
 
     if role_content is None:
         L.remove_paragraph(title_p)
-        for bp in bullet_placeholders:
-            L.remove_paragraph(bp)
+        L.remove_paragraph(bullet_anchor)
         return
-
-    bullets = role_content["bullets"]
-    if len(bullets) > capacity:
-        raise ValueError(f"{role_key}: {len(bullets)} bullets given, template only has {capacity} slots")
 
     title_token = f"{{{{{role_key.upper()}_TITLE}}}}"
     dates_token = f"{{{{{role_key.upper()}_DATES}}}}"
@@ -77,11 +76,7 @@ def fill_role(doc, role_key, role_content):
     if not (replaced_title and replaced_dates):
         raise ValueError(f"{role_key}: title/dates placeholder run not found (title={replaced_title}, dates={replaced_dates})")
 
-    for i, bp in enumerate(bullet_placeholders):
-        if i < len(bullets):
-            W.set_segments(bp, bullets[i])
-        else:
-            L.remove_paragraph(bp)
+    E.expand_lines(bullet_anchor, role_content["bullets"], W.set_segments)
 
 
 def fill_list_section(doc, prefix, capacity, items, section_header_text):
@@ -104,12 +99,13 @@ def fill_list_section(doc, prefix, capacity, items, section_header_text):
 def build(content: dict, output_path: str):
     W.load_meta()
     doc = docx.Document(TEMPLATE)
+    F.fill_fixed_tokens(doc, content.get("identity", {}))
 
     tagline_p = L.find_placeholder_paragraph(doc, "{{TAGLINE}}")
     W.set_segments(tagline_p, content["tagline"])
     W.apply_tagline_style(tagline_p)
     W.set_segments(L.find_placeholder_paragraph(doc, "{{SUMMARY}}"), content["summary"])
-    W.expand_labeled_lines(L.find_placeholder_paragraph(doc, "{{SKILLS}}"), _clusters(content.get("skills")))
+    E.expand_labeled_lines(L.find_placeholder_paragraph(doc, "{{SKILLS}}"), _clusters(content.get("skills")))
 
     for role_key in ("role1", "role2", "role3", "role4"):
         fill_role(doc, role_key, content["roles"].get(role_key))

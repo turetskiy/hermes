@@ -9,13 +9,14 @@ panel itself is web/setup_keypanel.py."""
 import os
 
 import paths
+from services import cancel
 from services.osutil import open_path
 from web.notify import notify
 from web.setup_keypanel import build_key_panel
 
 
 def setup_screen(show, push_line, page_state):
-    from nicegui import ui, run
+    from nicegui import ui
     from services import llm
     from web.progress import busy
 
@@ -106,7 +107,7 @@ def setup_screen(show, push_line, page_state):
             push_line(f"Sending a test request to {model} ...")
             async with busy(test_btn, provider_sel, model_sel, key_in):
                 try:
-                    await run.io_bound(llm.check_key)
+                    await cancel.io_bound(llm.check_key)
                     notify("Test request succeeded - model and key both work", type="positive")
                 except Exception as e:  # noqa: BLE001
                     push_line(f"! {e}")

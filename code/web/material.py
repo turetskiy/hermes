@@ -4,6 +4,7 @@ web/progress.py) via push_line; Build/Apply buttons disable with a spinner while
 import os
 
 import paths
+from services import cancel
 from web.confirm import build_confirm
 from web.material_files import build_file_manager
 from web.notify import notify
@@ -11,7 +12,7 @@ from web.progress import busy, screen_lock
 
 
 def material_screen(show, push_line):
-    from nicegui import ui, run
+    from nicegui import ui
     import factbook
     from services import llm
 
@@ -57,7 +58,7 @@ def material_screen(show, push_line):
                     push_line(f"Applying {len(qa)} answer(s) to the factbook...")
                     async with busy(apply_btn, *others(apply_btn)):
                         try:
-                            fb_box.value = await run.io_bound(factbook.resolve_gaps, fb_box.value, qa)
+                            fb_box.value = await cancel.io_bound(factbook.resolve_gaps, fb_box.value, qa)
                             refresh_gaps()
                             notify("Factbook updated - review & Save", type="positive")
                         except Exception as e:  # noqa: BLE001
@@ -85,7 +86,7 @@ def material_screen(show, push_line):
             push_line("Building factbook from the inbox...")
             async with busy(build_btn, *others(build_btn), add_files_btn, upload_ctl):
                 try:
-                    fb_box.value = await run.io_bound(factbook.build, inbox)
+                    fb_box.value = await cancel.io_bound(factbook.build, inbox)
                     fb_box.set_visibility(True)
                     save_btn.set_visibility(True)
                     refresh_gaps()

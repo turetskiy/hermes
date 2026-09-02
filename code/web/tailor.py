@@ -7,13 +7,15 @@ import json
 import os
 
 import paths
+from services import cancel
 from web.notify import notify
 from web.progress import busy, screen_lock
-from web.tailor_export import export_controls
+from web.tailor_export import docx_controls, feedback_controls
+from web.tailor_track_cache import track_cache
 
 
 def tailor_screen(show, push_line, page_state):
-    from nicegui import ui, run
+    from nicegui import ui
     import profile_store
     from content import assemble
     from content.pipeline import run_auto
@@ -22,8 +24,8 @@ def tailor_screen(show, push_line, page_state):
 
     # Fetch / Tailor / Build .docx / Apply feedback all touch the same result_box (or fields feeding
     # it) and none should run while another is mid-flight - register() each as it's created (build_docx
-    # and feedback's buttons live in tailor_export.py, wired in via export_controls() below), then
-    # others(btn) lists every sibling to freeze alongside btn's own operation.
+    # and feedback's buttons live in tailor_export.py, wired in via docx_controls()/feedback_controls()
+    # below), then others(btn) lists every sibling to freeze alongside btn's own operation.
     register, others = screen_lock()
 
     with ui.column().classes("gap-3") as scr:
@@ -62,7 +64,7 @@ def tailor_screen(show, push_line, page_state):
                 return
             push_line(f"Fetching {url} ...")
             async with busy(fetch_btn, *others(fetch_btn), url_in, jd_box):
-                text = await run.io_bound(vacancy.fetch_url, url)
+                text = await cancel.io_bound(vacancy.fetch_url, url)
                 if text and len(text) > 200:
                     jd_box.value = text
                     notify(f"Fetched {len(text)} characters", type="positive")
@@ -72,9 +74,6 @@ def tailor_screen(show, push_line, page_state):
 
         fetch_btn.on_click(fetch)
 
-        build_docx_btn, download_btn, feedback_in, feedback_btn, export_state = export_controls(
-            push_line, result_box, style_select, track_select, register, others)
-
         async def tailor():
             if not llm.has_key():
                 notify("Set your API key in Setup first", type="warning")
@@ -83,24 +82,19 @@ def tailor_screen(show, push_line, page_state):
             if not track_id:
                 notify("Pick a track first (build one in Profile)", type="warning")
                 return
-            result_box.set_visibility(False)
-            build_docx_btn.set_visibility(False)
-            download_btn.set_visibility(False)
-            feedback_in.set_visibility(False)
-            feedback_btn.set_visibility(False)
-            export_state["docx_path"] = None
+            reset_result()
             async with busy(tailor_btn, *others(tailor_btn), style_select, track_select, url_in,
                             jd_box, depth_select, extra_in):
                 try:
-                    content = await run.io_bound(assemble.assemble, track_id)
+                    content = await cancel.io_bound(assemble.assemble, track_id)
                     jd = jd_box.value.strip()
                     if jd:
                         push_line(f"Tailoring to the vacancy (depth={depth_select.value})...")
                         depth_text = llm.PROMPTS["depth_levels"][depth_select.value]
                         facts_path = os.path.join(paths.DATA, "factbook.md")
                         facts = open(facts_path).read() if os.path.exists(facts_path) else ""
-                        content = await run.io_bound(run_auto, content, jd, depth_text,
-                                                     extra_in.value.strip(), facts, False)
+                        content = await cancel.io_bound(run_auto, content, jd, depth_text,
+                                                        extra_in.value.strip(), facts, False)
                     else:
                         push_line("No vacancy given - using the baseline resume.")
                     result_box.value = json.dumps(content, ensure_ascii=False, indent=2)
@@ -108,12 +102,32 @@ def tailor_screen(show, push_line, page_state):
                     build_docx_btn.set_visibility(True)
                     feedback_in.set_visibility(True)
                     feedback_btn.set_visibility(True)
+                    save_track_result(track_id)
                     notify("Tailored - review below, then Build .docx", type="positive")
+                except cancel.Cancelled:
+                    # run.io_bound() swallows plain task cancellation and returns None - without this,
+                    # tailor() would treat that None as a successful result (writing "null" into
+                    # result_box and showing the success notify below). services.cancel is what
+                    # actually distinguishes "genuinely stopped" from "returned nothing", back to the
+                    # step where the track/vacancy/depth inputs are still there to adjust and retry.
+                    push_line("Cancelled - back to Profile.")
+                    notify("Tailoring cancelled", type="warning")
+                    show(3)
                 except (Exception, SystemExit) as e:  # noqa: BLE001
                     push_line(f"! {e}")
                     notify(f"Failed: {e}", type="negative")
 
-        tailor_btn = register(ui.button("Tailor", on_click=tailor).props("unelevated color=primary"))
+        with ui.row():
+            tailor_btn = register(ui.button("Tailor", on_click=tailor).props("unelevated color=primary"))
+            build_docx_btn, download_btn, export_state = docx_controls(
+                push_line, result_box, style_select, track_select, register, others)
+
+        feedback_in, feedback_btn = feedback_controls(push_line, result_box, register, others, export_state)
+
+        reset_result, restore_or_reset, save_track_result = track_cache(
+            track_select, result_box, build_docx_btn, download_btn, feedback_in, feedback_btn, export_state)
+        track_select.on_value_change(restore_or_reset)
+
         with ui.row():
             ui.button("Back", on_click=lambda: show(3)).props("flat")
     return scr

@@ -4,15 +4,19 @@ into web/tailor_export.py (generation vs. the rest of the screen)."""
 import json
 import os
 
+from services import cancel
 from web.notify import notify
 from web.progress import busy
 
 
-def build_profile_button(push_line, result_box, save_btn, label_in, register, others, extra_freeze):
+def build_profile_button(push_line, result_box, save_btn, label_in, register, others, extra_freeze,
+                          on_result=None):
     """register/others/extra_freeze come from profile_screen's shared screen_lock() - so a Build here
     locks out Save/Delete (and vice versa), plus the track-picking fields a Build shouldn't be able to
-    run underneath (switching tracks mid-build would misattribute the result to the wrong one)."""
-    from nicegui import ui, run
+    run underneath (switching tracks mid-build would misattribute the result to the wrong one).
+    on_result(), if given, runs once result_box.value holds the fresh profile - e.g. to sync the
+    per-role bullet-count inputs (web/profile_bullets.py) to what was just built."""
+    from nicegui import ui
     import factbook
     import profile
     from services import llm
@@ -29,12 +33,14 @@ def build_profile_button(push_line, result_box, save_btn, label_in, register, ot
         push_line("Extracting blocks / positioning / identity from the factbook...")
         async with busy(build_btn, *others(build_btn), *extra_freeze):
             try:
-                data = await run.io_bound(profile.generate, open(factbook.OUT).read())
+                data = await cancel.io_bound(profile.generate, open(factbook.OUT).read())
                 result_box.value = json.dumps(data, ensure_ascii=False, indent=2)
                 result_box.set_visibility(True)
                 save_btn.set_visibility(True)
                 if not label_in.value.strip():
                     label_in.value = data.get("roles", {}).get("role1", {}).get("title", "Resume")
+                if on_result:
+                    on_result()
                 notify("Profile ready - review & Save", type="positive")
             except Exception as e:  # noqa: BLE001
                 push_line(f"! {e}")

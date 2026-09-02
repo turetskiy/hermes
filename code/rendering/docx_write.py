@@ -127,23 +127,3 @@ def set_list_item(p, text):
                 run.font.color.rgb = RGBColor.from_string(META["list_color"])
 
 
-def _cluster_markup(c):
-    return f"**{c['label']}:** {c['items']}" if c.get("label") else c["items"]
-
-
-def expand_labeled_lines(anchor, clusters):
-    """Replace one anchor paragraph with N labelled lines - each a separate paragraph,
-    '**Label:** items' (bold label; label omitted if empty). Keeps the anchor's style."""
-    if not clusters:                 # nothing to show (e.g. a from-scratch track) -> blank the anchor
-        set_segments(anchor, "")
-        return
-    style = anchor.style
-    set_segments(anchor, _cluster_markup(clusters[0]))
-    prev = anchor._p
-    for c in clusters[1:]:
-        new_p = OxmlElement("w:p")
-        prev.addnext(new_p)
-        para = Paragraph(new_p, anchor._parent)
-        para.style = style
-        set_segments(para, _cluster_markup(c))
-        prev = new_p

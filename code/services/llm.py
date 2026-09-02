@@ -6,9 +6,10 @@ import json
 import os
 import random
 import re
+import threading
 import time
 
-from services import report, runlog
+from services import cancel, report, runlog
 from services.llm_config import (  # noqa: F401  re-exported - every existing llm.xxx(...) call site
     KEY_ENV_BY_PROVIDER, canonical_model, check_key, get_litellm, has_key, key_env_for, list_models,
     load_env, model, model_options, models_for_provider, provider_of, resolves_to, save_key, save_model,
@@ -44,6 +45,26 @@ def _short(e, limit=200):
     return text if len(text) <= limit else text[:limit] + "..."
 
 
+MIN_CALL_INTERVAL = 4.5  # seconds - a tailoring run fires ~10-30 calls back to back with zero pacing
+# otherwise; free/trial tiers (Gemini's free RPM is quite low) get bounced almost immediately once
+# that burst exceeds their per-minute quota - and providers report this as the SAME generic "high
+# demand"/503 a real outage would give, so it's easy to mistake sustained rate-limiting for one. This
+# keeps free/trial usage comfortably under a ~13 req/min ceiling; paid tiers skip it entirely.
+_pace_lock = threading.Lock()
+_last_call_at = [0.0]
+
+
+def _pace():
+    tier = key_info(provider_of(model()))["tier"]
+    if tier not in ("free", "trial"):
+        return
+    with _pace_lock:
+        wait = MIN_CALL_INTERVAL - (time.monotonic() - _last_call_at[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_call_at[0] = time.monotonic()
+
+
 def generate(system, user, attempts=6, label=None, max_tokens=8192):
     """Call the model, retrying transient failures (overloaded / 503 / 429 / timeout) with exponential
     backoff (2s, 4s, 8s, 16s, 30s). Non-transient errors (bad key, unknown model, 400) raise immediately.
@@ -53,11 +74,13 @@ def generate(system, user, attempts=6, label=None, max_tokens=8192):
     max_tokens defaults well above most providers' own implicit default - a "thinking" model (Groq's
     Qwen included) can burn thousands of tokens on its visible <think> reasoning before ever reaching
     the actual answer, and a too-small ceiling truncates it mid-thought, producing no JSON at all."""
+    cancel.check()  # a Stop click between blocks/attempts lands here before a new call even starts
     litellm = get_litellm()
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     tag = f" [{label}]" if label else ""
     runlog.write(f"\n=== LLM call{tag} (model={model()}) ===\nSYSTEM:\n{system}\nUSER:\n{user}")
     for attempt in range(1, attempts + 1):
+        _pace()
         try:
             response = litellm.completion(model=model(), messages=messages, max_tokens=max_tokens)
             content = response.choices[0].message.content
@@ -67,6 +90,7 @@ def generate(system, user, attempts=6, label=None, max_tokens=8192):
             if attempt == attempts or not _transient(e):
                 runlog.write(f"ERROR: {e}")
                 raise
+            cancel.check()  # don't sleep out a whole backoff window if a stop was requested meanwhile
             wait = min(2 ** attempt, 30) + random.uniform(0, 1)
             runlog.write(f"transient LLM error ({e}); retry {attempt}/{attempts - 1} in {wait:.1f}s")
             report.warn(f"  Model busy ({_short(e)}) - retrying in {wait:.0f}s ({attempt}/{attempts - 1})...")

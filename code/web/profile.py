@@ -1,13 +1,13 @@
 """The Profile screen: turn the factbook into blocks (achievement bullets), skills, roles, and
 identity - the data Tailor assembles resumes from. Pick an existing track to view/edit it (pulls its
-blocks by id, no model call), or Build a fresh one from the factbook. Progress goes to the shared
-page-level log (web/ui.py); Build/Save buttons disable with a spinner while working. `page_state` is
-the same dict web/tailor.py stashes its track dropdown in, so "Next" can carry the chosen track over."""
+blocks by id, no model call), or Build a fresh one from the factbook. `page_state` is the same dict
+web/tailor.py stashes its track dropdown in, so "Next" can carry the chosen track over."""
 import json
 
 from web.confirm import build_confirm
 from web.notify import notify
 from web.profile_build import build_profile_button
+from web.profile_bullets import build_bullet_controls
 from web.progress import busy, screen_lock
 
 NEW_TRACK = ""  # sentinel value in the dropdown for "start a new track" (never a real track id)
@@ -48,6 +48,7 @@ def profile_screen(show, push_line, page_state):
         result_box = ui.codemirror(language="JSON", line_wrapping=True) \
             .classes("w-full overflow-x-auto").style("height: 20rem")
         result_box.set_visibility(False)
+        bullets_row, pull_bullets = build_bullet_controls(result_box)
 
         def sync_next_enabled():
             # Next/Delete only make sense once a real, already-saved track is selected - "(new track)"
@@ -62,7 +63,13 @@ def profile_screen(show, push_line, page_state):
             track_id = e.value
             sync_next_enabled()
             if not track_id:
-                return  # "(new track)" - leave whatever is in the fields alone
+                # "(new track)" - the previously-loaded track's JSON/Save no longer apply to anything
+                # selected now (track_in/label_in are left alone though - text fields, not tied to the
+                # dropdown's value, so a user mid-typing a new track id shouldn't have that wiped).
+                result_box.set_visibility(False)
+                save_btn.set_visibility(False)
+                bullets_row.set_visibility(False)
+                return
             try:
                 data = profile_store.load_track(track_id)
             except KeyError as e2:
@@ -73,6 +80,7 @@ def profile_screen(show, push_line, page_state):
             result_box.value = json.dumps(data, ensure_ascii=False, indent=2)
             result_box.set_visibility(True)
             save_btn.set_visibility(True)
+            pull_bullets()
             push_line(f"Loaded existing track '{track_id}' for review/edit ({len(data['blocks'])} blocks).")
 
         track_select.on_value_change(load_selected_track)
@@ -90,6 +98,7 @@ def profile_screen(show, push_line, page_state):
                 track_in.value, label_in.value = "base", ""
                 result_box.set_visibility(False)
                 save_btn.set_visibility(False)
+                bullets_row.set_visibility(False)
                 sync_next_enabled()
                 tailor_select = page_state.get("tailor_track_select")
                 if tailor_select:  # auto-clears if it was pointing at the track we just deleted
@@ -119,11 +128,11 @@ def profile_screen(show, push_line, page_state):
                           f"positioning.json (track '{track_id}')")
                 notify(f"Saved ({n} blocks, track '{track_id}')", type="positive")
 
-        save_btn = register(ui.button("Save profile", on_click=save_profile))
+        with ui.row():
+            save_btn = register(ui.button("Save profile", on_click=save_profile))
+            build_profile_button(push_line, result_box, save_btn, label_in, register, others,
+                                  [track_select, track_in, label_in, delete_btn], on_result=pull_bullets)
         save_btn.set_visibility(False)
-
-        build_profile_button(push_line, result_box, save_btn, label_in, register, others,
-                              [track_select, track_in, label_in, delete_btn])
 
         def go_next():
             # track_select.value is always a real, already-saved track here - Next is disabled otherwise

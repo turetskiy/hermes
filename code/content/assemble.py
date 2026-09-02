@@ -32,6 +32,7 @@ LINES_PER_PAGE = 57
 
 BLOCKS = os.path.join(paths.DATA, "blocks.json")
 POSITIONING = os.path.join(paths.DATA, "positioning.json")
+IDENTITY = os.path.join(paths.DATA, "identity.json")
 
 
 def estimate_pages(docx_path: str) -> float:
@@ -69,10 +70,18 @@ def select_list(shared_map, pri, cap):
     return ordered[:cap]
 
 
-def build_content(pos_track, shared, blocks, sel_track):
+def load_identity():
+    """data/identity.json, or {} if it doesn't exist yet - fill_template.py's docx_fixed.py leaves a
+    token as-is when the data it needs isn't there, so an empty dict is a safe default, not an error."""
+    return load(IDENTITY) if os.path.exists(IDENTITY) else {}
+
+
+def build_content(pos_track, shared, blocks, sel_track, identity):
     """Assemble the content dict from a track's framing (pos_track) + shared pools + blocks. sel_track
     is a track id resolved to its assigned block ids via block_tracks.py - either the track's own id,
-    or a borrowed 'block_source' track for one that hasn't saved blocks of its own yet."""
+    or a borrowed 'block_source' track for one that hasn't saved blocks of its own yet. A role's bullet
+    count is purely this track's own max_bullets - the template has no capacity ceiling to respect
+    (see rendering/fill_template.py's docstring)."""
     allowed_ids = set(block_tracks.ids_for_track(sel_track))
     roles = {}
     for role_slot, spec in pos_track["roles"].items():
@@ -84,6 +93,7 @@ def build_content(pos_track, shared, blocks, sel_track):
 
     pri = pos_track["priorities"]
     return {
+        "identity": identity,
         "tagline": pos_track["headline"],
         "summary": pos_track["summary"],
         "skills": pos_track["skills"],
@@ -100,7 +110,7 @@ def assemble(track: str) -> dict:
     if track not in pos_all["tracks"]:
         raise SystemExit(f"unknown track '{track}'. Known: {list(pos_all['tracks'])}")
     pos = pos_all["tracks"][track]
-    return build_content(pos, pos_all["shared"], blocks, pos.get("block_source", track))
+    return build_content(pos, pos_all["shared"], blocks, pos.get("block_source", track), load_identity())
 
 
 def assemble_from(pos_track: dict) -> dict:
@@ -111,7 +121,7 @@ def assemble_from(pos_track: dict) -> dict:
     sel = pos_track.get("block_source")
     if not sel:
         raise SystemExit("in-memory track needs a 'block_source' (existing track for block tags).")
-    return build_content(pos_track, shared, blocks, sel)
+    return build_content(pos_track, shared, blocks, sel, load_identity())
 
 
 if __name__ == "__main__":

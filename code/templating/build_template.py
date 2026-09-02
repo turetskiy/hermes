@@ -32,14 +32,6 @@ TEMPLATE_PATH = os.path.join(paths.DATA, "template.docx")
 META_PATH = os.path.join(paths.DATA, "template.meta.json")
 
 
-def _identity():
-    """name/contact/companies/education baked into the fixed tokens, from data/identity.json (profile.py)."""
-    try:
-        with open(os.path.join(paths.DATA, "identity.json")) as f:
-            return json.load(f)
-    except (FileNotFoundError, ValueError):
-        return {}
-
 SLATE, FOREST, OXBLOOD = "3C5A74", "34594A", "7C3B46"
 INK, MUTED = C.INK, C.MUTED
 CALIBRI, LIGHT, CONSOLAS, CAMBRIA = "Calibri", "Calibri Light", "Consolas", "Cambria"
@@ -120,7 +112,7 @@ def _write_meta(t):
 def build(style):
     if style not in THEMES:
         return custom_templates.build(style, TEMPLATE_PATH, META_PATH)
-    t = {**THEMES[style], "identity": _identity()}
+    t = THEMES[style]
     doc = docx.Document()
     C.setup_page(doc, t["margins"])
     C.normal_style(doc, t["body_font"], t["body_size"])

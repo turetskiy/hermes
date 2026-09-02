@@ -5,7 +5,11 @@ docstring for the full token list) for fill_template.py to be able to fill it. I
 stem + .meta.json - style/body_font/bold_font/link_font/speak_header/articles_header/tagline/
 list_color/footer_size, see build_template.py's _write_meta() for the shape) carries its fonts/colors;
 falls back to docx_write.py's own defaults (Calibri Light/Calibri) if there's no sidecar, which suit
-most résumés reasonably well."""
+most résumés reasonably well.
+
+Just a copy: NAME/CONTACT/ROLEn_COMPANY/EDU_* stay tokens all the way through, same as a generated
+template - fill_template.py's docx_fixed.py fills them from identity.json in its own single pass, not
+here, so neither this source file nor the copy it produces ever carries real personal data."""
 import os
 import shutil
 

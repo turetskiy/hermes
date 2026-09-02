@@ -7,7 +7,13 @@ import os
 import paths
 from content import block_tracks
 
-CAP = {"role1": 10, "role2": 9, "role3": 7, "role4": 4}
+# The 4 valid role slots, and a sensible starting bullet count for each when a profile is first built
+# (min'd against how many the model actually found for that role) - a Hermes-owned default, same as
+# content/tracks.py's DEFAULT_TRACK/new_track_questions use for a track built the CLI way. Not tied to
+# any template capacity - the template has none; raise a role's max_bullets freely after Build profile,
+# directly in the editable JSON, if you want more than the default.
+DEFAULT_MAX_BULLETS = {"role1": 6, "role2": 4, "role3": 3, "role4": 2}
+ROLE_SLOTS = tuple(DEFAULT_MAX_BULLETS)
 
 
 def _flat_skills(sk):
@@ -25,13 +31,13 @@ def _flat_skills(sk):
 def _positioning(data, track_id, label):
     speaking = {s["id"]: s["text"] for s in data.get("public_speaking", []) if s.get("id") and s.get("text")}
     articles = {a["id"]: a["text"] for a in data.get("articles", []) if a.get("id") and a.get("text")}
-    counts = {r: 0 for r in CAP}
+    counts = {r: 0 for r in ROLE_SLOTS}
     for b in data.get("blocks", []):
         if b.get("role_slot") in counts:
             counts[b["role_slot"]] += 1
     roles = {r: {"title": s.get("title", ""), "dates": s.get("dates", ""),
-                 "max_bullets": min(counts[r], CAP[r]) or CAP[r]}
-             for r, s in data.get("roles", {}).items() if r in CAP}
+                 "max_bullets": min(counts[r], DEFAULT_MAX_BULLETS[r]) or DEFAULT_MAX_BULLETS[r]}
+             for r, s in data.get("roles", {}).items() if r in ROLE_SLOTS}
     track = {
         "label": label, "headline": data.get("headline", ""), "summary": data.get("summary", ""),
         "footer_title": data.get("footer_title", ""), "skills": _flat_skills(data.get("skills")),
@@ -80,7 +86,7 @@ def write_profile(data, track_id, label):
     # otherwise collide across tracks now that blocks.json is one shared, cumulative pool
     blocks = [{"id": b.get("id") or f"{track_id}_b{i}", "role_slot": b["role_slot"],
                "rank": b.get("rank", i + 1), "text": b.get("text", "")}
-              for i, b in enumerate(data.get("blocks", [])) if b.get("role_slot") in CAP]
+              for i, b in enumerate(data.get("blocks", [])) if b.get("role_slot") in ROLE_SLOTS]
     pos = _positioning(data, track_id, label)
     try:  # keep any existing tracks; refresh shared pools + this track
         with open(os.path.join(paths.DATA, "positioning.json")) as f:

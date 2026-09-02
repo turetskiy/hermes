@@ -4,7 +4,7 @@ fixed block is a config entry, not code (OCP)."""
 import json
 
 from rendering import fill_template
-from services import runlog, ui
+from services import cancel, runlog, ui
 from services.llm import PROMPTS, call_block
 from services.ui import ask
 
@@ -104,6 +104,7 @@ def run_auto(content, jd, depth, extra, facts, mock):
     (like the Profile screen) rather than block by block."""
     base = dict(jd=jd, depth=depth, extra=extra)
     for spec in _blocks(content):
+        cancel.check()  # between blocks - shortens a Stop click to one block's wait, not all of them
         fields, cur = _fields(spec, content, base, facts)
         res = call_block(spec["prompt"], fields, mock, {spec["key"]: cur, "gaps": []})
         _dset(content, spec["path"], res.get(spec["key"], cur))

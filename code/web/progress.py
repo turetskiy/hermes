@@ -8,6 +8,11 @@ import asyncio
 import time
 from contextlib import asynccontextmanager
 
+from services import cancel
+from web.screen_lock import screen_lock  # noqa: F401  re-exported - existing `from web.progress import
+# busy, screen_lock` call sites keep working; this module owns the shared busy()/log/stop machinery,
+# screen_lock.py owns the separate per-screen mutual-exclusion registry concern.
+
 _state = {"bar": None, "busy_count": 0, "stop_btn": None, "current_task": None}
 MIN_BUSY_SECONDS = 0.7  # let one indeterminate animation cycle finish, so a fast call doesn't look glitchy
 
@@ -15,10 +20,15 @@ MIN_BUSY_SECONDS = 0.7  # let one indeterminate animation cycle finish, so a fas
 def init_bar():
     """Build the shared indeterminate progress bar + its Stop button (called once, in web/ui.py's
     footer). One handler installed once (reads current_task from _state) rather than re-registered
-    per busy() call, which would otherwise stack duplicate handlers - same fix as web/setup_keypanel.py."""
+    per busy() call, which would otherwise stack duplicate handlers - same fix as web/setup_keypanel.py.
+    Sets services.cancel's flag - see that module for why task.cancel() alone can't actually interrupt
+    a run.io_bound() call already in progress."""
     from nicegui import ui
+    from web.notify import notify
 
     def stop_current():
+        cancel.request()
+        notify("Stopping (finishing the current step)...", type="warning")
         task = _state.get("current_task")
         if task and not task.done():
             task.cancel()
@@ -81,24 +91,6 @@ def _safe(widget, method):
         pass
 
 
-def screen_lock():
-    """A per-screen registry of action buttons that must never run concurrently (Fetch/Tailor/Build
-    .docx/Apply feedback all touch the same result, for instance). register() each as it's created;
-    others(btn) - called from inside the click handler, so by then every sibling is registered even
-    if defined later in the file - lists every OTHER registered button, to pass into busy() as extra
-    freeze targets so ANY one of them running locks out ALL the others, not just its own button."""
-    registered = []
-
-    def register(btn):
-        registered.append(btn)
-        return btn
-
-    def others(btn):
-        return [b for b in registered if b is not btn]
-
-    return register, others
-
-
 @asynccontextmanager
 async def busy(button, *freeze):
     """Disable a button, show its built-in spinner, AND light the shared progress bar + Stop button
@@ -108,10 +100,14 @@ async def busy(button, *freeze):
     partway through rather than just at the start, so editing it mid-flight can't produce a mismatch
     between what's shown and what's actually used. Stays up for at least MIN_BUSY_SECONDS even if the
     work finishes sooner, so a fast response doesn't cut the indeterminate bar's animation off mid-
-    cycle. Nests safely (busy_count) in case two operations ever overlap. Stop cancels the awaiting
-    task, so the UI moves on immediately - but Python can't forcibly kill the background thread the
-    actual model call runs in, so a cancelled request may keep running unseen for a few more seconds;
-    its result is simply discarded."""
+    cycle. Nests safely (busy_count) in case two operations ever overlap. Stop sets services.cancel's
+    flag (checked inside services.llm/content.pipeline) and cancels the awaiting task - the latter
+    alone can't interrupt a run.io_bound() call already running, so it mainly helps this function's own
+    trailing sleep below. A caller with its own extra behavior on cancellation (e.g. web/tailor.py
+    navigating back a step) should catch cancel.Cancelled itself, inside the `yield`; this is the
+    fallback for every caller that doesn't - cancelling still ends cleanly instead of a bare traceback,
+    just without anything beyond the generic "Cancelled" this reports."""
+    cancel.clear()
     _safe(button, "disable")
     button.props("loading")
     for w in freeze:
@@ -126,7 +122,7 @@ async def busy(button, *freeze):
     cancelled = False
     try:
         yield
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, cancel.Cancelled):
         cancelled = True
     finally:
         remaining = MIN_BUSY_SECONDS - (time.monotonic() - started)
