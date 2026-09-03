@@ -3,6 +3,7 @@ the same person across every track) plus this track's label/headline/summary/foo
 fields, positioning.json). One form, one "Save identity" button. Role title/dates/bullets live in
 web/profile_roles.py instead, alongside each role's own Build/Save. Split out of web/profile.py by
 concern."""
+from web.inline_edit import attach_inline_edit
 from web.notify import notify
 from web.progress import busy
 
@@ -15,8 +16,7 @@ def build_identity_panel(get_track_id, push_line, register, others, on_saved=Non
     import profile_store
     from content import profile_drafts
 
-    with ui.column().classes("w-full gap-2") as panel:
-        ui.label("Identity").classes("font-bold")
+    with ui.expansion("Identity").classes("w-full") as panel:
         with ui.row().classes("w-full gap-3"):
             label_in = ui.input("Track label (e.g. the target role)").classes("flex-1")
             name_in = ui.input("Name").classes("flex-1")
@@ -30,6 +30,8 @@ def build_identity_panel(get_track_id, push_line, register, others, on_saved=Non
         headline_in = ui.input("Headline").classes("w-full")
         summary_in = ui.textarea("Summary").props("rows=3").classes("w-full")
         footer_in = ui.input("Footer title").classes("w-full")
+        for f in (headline_in, summary_in, footer_in):
+            attach_inline_edit(f)
 
         async def save():
             tid = get_track_id()
@@ -71,5 +73,10 @@ def build_identity_panel(get_track_id, push_line, register, others, on_saved=Non
         headline_in.value = meta.get("headline") or (draft or {}).get("headline", "")
         summary_in.value = meta.get("summary") or (draft or {}).get("summary", "")
         footer_in.value = meta.get("footer_title") or (draft or {}).get("footer_title", "")
+
+        # collapsed by default once there's something to show - expanded (needs attention) otherwise
+        panel.value = not bool(name_in.value)
+        panel._props["caption"] = name_in.value
+        panel.update()
 
     return panel, load

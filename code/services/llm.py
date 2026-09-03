@@ -125,6 +125,14 @@ def _extract_json(text):
     return json.loads(text[a:b + 1])
 
 
+def rewrite(text, instruction, label="inline_edit"):
+    """Rewrite one piece of text per a free-form instruction - the model behind the inline-edit popover
+    (web/inline_edit.py). Plain text in, plain text out - no JSON schema, so no _extract_json/retry-on-
+    malformed-JSON ladder here, just generate()'s own transient-error retries."""
+    task = PROMPTS["inline_edit"]["task"].replace("{text}", text).replace("{instruction}", instruction)
+    return generate(PROMPTS["inline_edit"]["system"], task, label=label).strip()
+
+
 def call_block(prompt_key, fields, mock, fallback):
     """Tailor one block: build prompt -> call -> parse. On mock/error, return fallback. A tailoring run
     can call this ~30 times (one per resume block), so generate()'s own retry budget is capped at 3

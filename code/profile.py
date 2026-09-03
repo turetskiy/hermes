@@ -39,8 +39,17 @@ def propose(factbook):
     return _generate_json("profile_select", task, "profile_select")
 
 
-def _facts_for(draft, assign):
-    facts = [f for f in draft.get("facts", []) if f.get("assign") == assign]
+def _facts_for(draft, category):
+    """Facts currently in one bucket. For a role, a fact must both live under that role (its fixed
+    'role' field, set once at Propose time from the factbook's own structure - never reassignable to a
+    DIFFERENT role) AND still be assigned there ('assign' == 'role', the default - a fact can be pulled
+    out to skills/speaking/articles/exclude, but never moved to another role1-4). For every other
+    bucket, 'assign' matching the bucket name is the whole test."""
+    if category in ROLE_SLOTS:
+        facts = [f for f in draft.get("facts", [])
+                 if f.get("role") == category and f.get("assign", "role") == "role"]
+    else:
+        facts = [f for f in draft.get("facts", []) if f.get("assign") == category]
     return sorted(facts, key=lambda f: f.get("rank", 999))
 
 

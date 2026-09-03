@@ -9,6 +9,7 @@ import os
 import paths
 from services import cancel
 from web.confirm import build_confirm
+from web.inline_edit_lines import attach_inline_edit_lines
 from web.material_facts import build_add_fact
 from web.material_files import build_file_manager
 from web.material_gaps import build_gaps
@@ -37,6 +38,7 @@ def material_screen(show, push_line):
         fb_view.set_visibility(False)
         fb_box = ui.textarea("Factbook (Markdown source)").props("rows=18").classes("w-full")
         fb_box.set_visibility(False)
+        attach_inline_edit_lines(fb_box)
         edit_switch = ui.switch("Edit")
         edit_switch.set_visibility(False)
 

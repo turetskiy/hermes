@@ -52,6 +52,11 @@ def profile_screen(show, push_line, page_state):
             has_track = bool(track_select.value)
             next_btn.enable() if has_track else next_btn.disable()
             delete_btn.set_visibility(has_track)
+            # locked to the dropdown's own value whenever a real track is selected - every Build/Save
+            # button below reads get_track_id() at click time, so letting this drift out of sync with
+            # the dropdown (while it still shows the old track as "selected") would silently redirect
+            # saves to a different track without any indication anything had changed.
+            track_in.disable() if has_track else track_in.enable()
 
         def refresh_after_save():
             # a Save may have just created/updated a track that isn't in the dropdown's options yet -

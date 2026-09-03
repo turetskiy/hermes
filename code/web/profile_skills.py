@@ -1,6 +1,7 @@
 """Build panel (Step 2) for skills: a "Build skills" button that clusters whatever facts are currently
 tagged 'skills' in the Selection draft into labeled groups, an editable clusters list, and its own
 "Save skills" button - independent of every role and identity. Split out of web/profile.py by concern."""
+from web.inline_edit import attach_inline_edit
 from web.notify import notify
 from web.progress import busy
 
@@ -23,6 +24,8 @@ def build_skills_panel(get_track_id, push_line, register, others, on_saved=None)
                 with ui.row().classes("w-full items-start gap-2"):
                     label_in = ui.input(value=c.get("label", "")).props("dense").classes("w-48")
                     items_in = ui.input(value=c.get("items", "")).props("dense").classes("flex-1")
+                    attach_inline_edit(label_in)
+                    attach_inline_edit(items_in)
 
                     def _edit_label(e, i=i):
                         state["clusters"][i]["label"] = e.value
@@ -39,6 +42,11 @@ def build_skills_panel(get_track_id, push_line, register, others, on_saved=None)
 
                     ui.button(icon="close", on_click=_remove).props("flat dense round")
 
+    def _update_header():
+        n = len(state["clusters"])
+        panel._props["caption"] = f"{n} cluster{'s' if n != 1 else ''}" if n else "not built yet"
+        panel.update()
+
     async def build():
         tid = get_track_id()
         if not tid:
@@ -53,6 +61,7 @@ def build_skills_panel(get_track_id, push_line, register, others, on_saved=None)
             try:
                 state["clusters"] = await cancel.io_bound(profile.build_skills, draft)
                 _render()
+                _update_header()
                 notify(f"{len(state['clusters'])} skill clusters built - review & Save", type="positive")
             except Exception as e:  # noqa: BLE001
                 push_line(f"! {e}")
@@ -67,16 +76,18 @@ def build_skills_panel(get_track_id, push_line, register, others, on_saved=None)
             profile.write_skills(tid, state["clusters"])
             push_line(f"Saved skills: {len(state['clusters'])} clusters")
             notify("Skills saved", type="positive")
+            _update_header()
             if on_saved:
                 on_saved()
 
     def load(track_id):
         state["clusters"] = profile_store.load_skills(track_id) if track_id else []
         _render()
+        panel.value = not state["clusters"]  # expanded (needs attention) if nothing's built yet
+        _update_header()
 
-    with ui.column().classes("w-full gap-2") as panel:
+    with ui.expansion("Skills").classes("w-full") as panel:
         with ui.row().classes("w-full items-center gap-2"):
-            ui.label("Skills").classes("font-bold")
             build_btn = register(ui.button("Build skills", on_click=build).props("outline"))
             save_btn = register(ui.button("Save skills", on_click=save))
         rows_col = ui.column().classes("w-full gap-1")
